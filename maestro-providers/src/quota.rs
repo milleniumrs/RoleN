@@ -48,3 +48,26 @@ pub fn set_manual_budget(provider_id: &str, plan_limit: u64) -> Result<(), Provi
     }
     save(&subs)
 }
+
+/// Remove any budget/subscription for a provider: its quota becomes "unknown"
+/// again, which silences threshold alerts and makes rules treat it
+/// optimistically. Returns true when an entry was removed.
+pub fn clear_budget(provider_id: &str) -> Result<bool, ProviderError> {
+    let mut subs = load()?;
+    let before = subs.len();
+    subs.retain(|s| s.provider_id != provider_id);
+    let removed = subs.len() != before;
+    if removed {
+        save(&subs)?;
+    }
+    Ok(removed)
+}
+
+/// The configured plan limit for a provider, if any (used to explain alerts).
+pub fn plan_limit(provider_id: &str) -> Option<(u64, QuotaSource)> {
+    load()
+        .ok()?
+        .into_iter()
+        .find(|s| s.provider_id == provider_id)
+        .and_then(|s| s.plan_limit.map(|l| (l, s.source)))
+}

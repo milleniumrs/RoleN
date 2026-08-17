@@ -289,12 +289,16 @@ enum ProviderAction {
         #[arg(long)]
         id: Option<String>,
     },
-    /// Set a manual monthly token budget for a provider (FR-4.2)
+    /// Set or clear a manual token budget for a provider (FR-4.2)
     Budget {
         #[arg(long)]
         id: String,
+        /// Tokens per billing cycle
         #[arg(long)]
-        tokens: u64,
+        tokens: Option<u64>,
+        /// Remove the budget (quota becomes unknown: no alerts, optimistic routing)
+        #[arg(long)]
+        clear: bool,
     },
 }
 
@@ -1328,9 +1332,23 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
                 }
             }
         }
-        ProviderAction::Budget { id, tokens } => {
-            providers::quota::set_manual_budget(&id, tokens)?;
-            println!("manual budget for '{id}': {tokens} tokens/cycle");
+        ProviderAction::Budget { id, tokens, clear } => {
+            match (clear, tokens) {
+                (true, _) => {
+                    if providers::quota::clear_budget(&id)? {
+                        println!("budget for '{id}' cleared — quota is now unknown (no threshold alerts)");
+                    } else {
+                        println!("no budget was configured for '{id}'");
+                    }
+                }
+                (false, Some(t)) => {
+                    providers::quota::set_manual_budget(&id, t)?;
+                    println!("manual budget for '{id}': {t} tokens/cycle");
+                }
+                (false, None) => {
+                    anyhow::bail!("pass --tokens <N> to set a budget, or --clear to remove it")
+                }
+            }
         }
     }
     Ok(())
