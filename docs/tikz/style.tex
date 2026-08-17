@@ -1,0 +1,37 @@
+% Shared TikZ styles for the Maestro design-document figures.
+\usetikzlibrary{positioning,calc,fit,backgrounds,arrows.meta}
+
+\tikzset{
+  win/.style        = {draw=black!60, rounded corners=2pt, fill=white, line width=0.5pt},
+  titlebar/.style   = {draw=black!60, fill=black!10, rounded corners=2pt, line width=0.5pt},
+  strip/.style      = {draw=black!35, fill=black!4, line width=0.4pt},
+  panel/.style      = {draw=black!40, fill=black!2, rounded corners=1.5pt, line width=0.4pt},
+  panelhdr/.style   = {font=\scriptsize\bfseries, anchor=west, text=black!75},
+  tab/.style        = {draw=black!40, fill=black!5, rounded corners=1.5pt, font=\scriptsize, inner sep=2pt, line width=0.4pt},
+  tabsel/.style     = {draw=black!70, fill=black!20, rounded corners=1.5pt, font=\scriptsize\bfseries, inner sep=2pt, line width=0.6pt},
+  btn/.style        = {draw=black!50, fill=black!8, rounded corners=1.5pt, font=\scriptsize, inner sep=2.5pt, line width=0.4pt},
+  field/.style      = {draw=black!45, fill=white, rounded corners=1pt, font=\scriptsize\ttfamily, inner sep=2.5pt, line width=0.4pt},
+  mono/.style       = {font=\scriptsize\ttfamily, anchor=west, inner sep=0pt},
+  monos/.style      = {font=\tiny\ttfamily, anchor=west, inner sep=0pt},
+  monob/.style      = {font=\scriptsize\ttfamily\bfseries, anchor=west, inner sep=0pt},
+  lbl/.style        = {font=\scriptsize, anchor=west, inner sep=0pt},
+  note/.style       = {font=\scriptsize\itshape, anchor=west, text=black!55, inner sep=0pt},
+  callout/.style    = {font=\scriptsize\itshape, text=black!55, anchor=west},
+  arrowto/.style    = {-{Latex[length=3pt]}, draw=black!45, line width=0.4pt},
+  ok/.style         = {circle, fill=black!65, inner sep=1.1pt},
+  warn/.style       = {draw=black!70, fill=black!25, rounded corners=1pt, font=\tiny\bfseries, inner sep=1.5pt},
+}
+
+% \gauge{x}{y}{width}{fraction}{label}
+\newcommand{\gauge}[5]{%
+  \draw[draw=black!45, fill=black!6, rounded corners=1pt] (#1,#2) rectangle ++(#3,0.22);
+  \draw[draw=none, fill=black!55, rounded corners=1pt] (#1,#2) rectangle ++({#3*#4},0.22);
+  \node[monos, anchor=west] at (#1+#3+0.1,#2+0.11) {#5};%
+}
+
+% \sparkline{x}{y}{unit width}{max height}{comma list of 0..1 values}
+\newcommand{\sparkline}[5]{%
+  \foreach \v [count=\i from 0] in {#5} {
+    \draw[draw=none, fill=black!45] ({#1+\i*#3},#2) rectangle ++({#3*0.7},{#4*\v});
+  }%
+}

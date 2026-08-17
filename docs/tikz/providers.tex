@@ -1,0 +1,32 @@
+% Mission Control - Providers tab (TUI-DESIGN 3.3)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \draw[panel] (0,0) rectangle (15.4,4.0);
+
+  \foreach \h/\x in {name/0.25, type/2.5, status/4.5, models/6.4, quota/8.1, latency/10.3, {cost today}/12.4} {
+    \node[monob] at (\x,3.65) {\h};
+  }
+  \draw[black!35, line width=0.4pt] (0.15,3.47) -- (15.25,3.47);
+
+  \foreach \n/\t/\s/\m/\q/\l/\c/\y in {%
+    Claude/api/{(*) ok}/4/{78\% left}/380ms/{\$0.92}/3.1,
+    Kimi/api/{(*) ok}/3/{51\% left}/520ms/{\$0.44}/2.65,
+    claude/cli/{(*) ok}/-/{parsed: 61\%}/-/-/2.2,
+    ollama-local/{ollama-local}/{(*) ok}/20/unmetered/90ms/{\$0.00}/1.75,
+    ollama-vc/{ollama-remote}/{(*) ok}/14/{ssh tunnel}/9ms/{\$0.00}/1.3}
+  {
+    \node[mono] at (0.25,\y) {\n};
+    \node[mono] at (2.5,\y) {\t};
+    \node[mono] at (4.5,\y) {\s};
+    \node[mono] at (6.4,\y) {\m};
+    \node[mono] at (8.1,\y) {\q};
+    \node[mono] at (10.3,\y) {\l};
+    \node[mono] at (12.4,\y) {\c};
+  }
+  \node[warn] at (9.65,2.65) {[!]};
+
+  \draw[black!25, line width=0.3pt] (0.15,1.0) -- (15.25,1.0);
+  \foreach \b/\x in {{[+ Add]}/0.8, {[Detect CLIs]}/2.4, {[Health Check]}/4.5} {
+    \node[btn] at (\x,0.55) {\b};
+  }
+  \node[note] at (6.2,0.55) {Enter -> provider detail (capability matrix, quota, tunnel)};
+\end{tikzpicture}

@@ -1,0 +1,30 @@
+% Mission Control - Projects tab (TUI-DESIGN 3.2)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \draw[panel] (0,0) rectangle (15.4,3.5);
+  \node[panelhdr] at (0.15,3.32) {Projects};
+
+  % header row
+  \foreach \h/\x in {name/0.25, state/3.2, tasks/5.0, {tok today}/7.0, cost/9.2, questions/10.9} {
+    \node[monob] at (\x,2.9) {\h};
+  }
+  \draw[black!35, line width=0.4pt] (0.15,2.72) -- (15.25,2.72);
+
+  \foreach \n/\s/\t/\k/\c/\q/\y in {%
+    shop-redesign/{> running}/{2/6 done}/60.3k/{\$1.42}/{2 pending}/2.4,
+    blog-engine/{|| paused}/{1/4 done}/3.1k/{\$0.41}/{-}/1.95,
+    scraper/{[ok] done}/{5/5 done}/-/{\$2.07}/{-}/1.5}
+  {
+    \node[mono] at (0.25,\y) {\n};
+    \node[mono] at (3.2,\y) {\s};
+    \node[mono] at (5.0,\y) {\t};
+    \node[mono] at (7.0,\y) {\k};
+    \node[mono] at (9.2,\y) {\c};
+    \node[mono] at (10.9,\y) {\q};
+  }
+  \node[warn] at (13.0,2.4) {[!]};
+
+  \draw[black!25, line width=0.3pt] (0.15,1.15) -- (15.25,1.15);
+  \foreach \b/\x in {{[Enter] open}/0.9, {[Ctrl+N] new}/2.9, {[Del] archive}/4.9, {[I]nterview}/6.9} {
+    \node[btn] at (\x,0.65) {\b};
+  }
+\end{tikzpicture}

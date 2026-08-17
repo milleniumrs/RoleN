@@ -1,0 +1,318 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[a4paper,margin=1.7cm]{geometry}
+\usepackage{fontspec}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usepackage{hyperref}
+\input{tikz/style.tex}
+\hypersetup{colorlinks=true, linkcolor=black, urlcolor=blue!60!black}
+\setmainfont{Georgia}
+\setmonofont{Consolas}
+% the document carries its own section numbers (1., 3.1, ...)
+\setcounter{secnumdepth}{0}
+\setcounter{tocdepth}{2}
+% wireframes: never wrap, fixed columns, small enough to fit 100 cols
+\lstset{
+  basicstyle=\scriptsize\ttfamily,
+  breaklines=false,
+  columns=fixed,
+  keepspaces=true,
+  frame=single,
+  framesep=3pt,
+  xleftmargin=2pt,
+  backgroundcolor=\color{gray!7},
+  aboveskip=8pt, belowskip=8pt,
+}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}
+\titleformat{\subsection}{\normalsize\bfseries}{}{0pt}{}
+\titleformat{\subsubsection}{\small\bfseries}{}{0pt}{}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Maestro --- TUI Design}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\title{\textbf{Maestro --- TUI Design}\\[2pt]
+\large Wireframes, interaction flows and settings inventory}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+{\small\tableofcontents}
+\clearpage
+Companion to the design decisions (FR-10). All wireframes are schematic mock-ups of AppCUI windows/controls (rendered as vector figures in the PDF build). AppCUI model: a \textbf{desktop} hosts multiple \textbf{windows}; a bottom/top \textbf{app bar} shows global status; every action is reachable by keyboard, menu and mouse.
+
+\section{1. Design Principles}
+\begin{itemize}
+  \item \textbf{One Mission Control, many satellites.} The main window (tabs) is for global state;
+every \emph{project} and every \emph{session} can open as its own satellite window so parallel work is visible side by side on the desktop.
+
+  \item \textbf{Live by default.} Every list/gauge subscribes to the event bus; no refresh buttons.
+  \item \textbf{Nothing hidden.} Pending questions, write-queue depth and quota alarms are always
+one glance away (app bar + dashboard ticker).
+
+  \item \textbf{Keyboard-first.} Global hotkeys work from any window; every form is tab-navigable.
+  \item \textbf{Same core for TUI and CLI} — the TUI is a view; \texttt{maestro-cli} can do everything.
+\end{itemize}
+\section{2. Global Chrome}
+\begin{center}
+\input{tikz/chrome.tex}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{App bar segments} (left->right): active sessions • tokens today • cost today •
+write-queue depth • pending clarifications (click -> Interrogation Center) • active alerts (click -> alerts log) • clock. Segments are clickable buttons.
+
+  \item \textbf{Menu map}:
+  \begin{itemize}
+    \item \emph{File}: New Project, Open Workspace, Import/Export Config, Quit
+    \item \emph{Project}: Run/Pause/Resume, New Task, Interview, Regenerate AGENTS.md, Skills…
+    \item \emph{Providers}: Add Provider, Detect CLIs, Health Check All, Quota Report
+    \item \emph{Rules}: New Rule, Dry-Run, Import YAML
+    \item \emph{Sessions}: Quick Chat, New Task Session, Pause All, Transcripts…
+    \item \emph{View}: Mission Control, Tile Windows, Theme, Focus Mode
+    \item \emph{Tools}: Settings, Config Doctor, Logs, Sandbox Allow-Lists
+    \item \emph{Help}: Shortcuts, About
+  \end{itemize}
+\end{itemize}
+\section{3. Mission Control (main window, opens maximized)}
+Tab control with 6 fixed tabs: \textbf{Dashboard · Projects · Providers · Rules · Questions · Activity}.
+
+\subsection{3.1 Dashboard tab}
+\begin{center}
+\input{tikz/dashboard.tex}
+\end{center}
+
+\begin{itemize}
+  \item Sessions listview: double-click -> session window; right-click -> pause/steer/kill/migrate.
+  \item Provider gauges: progress bars + projected-exhaustion estimate; click -> provider window.
+  \item Write queue: depth + applied/rejected counters + sparkline (GraphView); click -> ticket log.
+\end{itemize}
+\subsection{3.2 Projects tab}
+\begin{center}
+\input{tikz/projects.tex}
+\end{center}
+
+\subsection{3.3 Providers tab}
+\begin{center}
+\input{tikz/providers.tex}
+\end{center}
+
+\textbf{Provider window} (double-click): tabs \emph{Details · Models · Quota · Adapter}.
+
+\begin{itemize}
+  \item Details: type, endpoint/CLI path, key reference (never the secret — \texttt{[••• stored in keychain]},
+[Change] [Test] buttons).
+
+  \item Models: capability matrix (context, vision, tools, streaming, \$/M tok) — editable grid.
+  \item Quota: plan limit, cycle, renewal date, source picker (\texttt{api/parsed/manual/estimated}),
+burn graph, alert thresholds.
+
+  \item Adapter (CLI type only): invocation template, output parser, quota parser, overlay mode.
+\end{itemize}
+\subsection{3.4 Rules tab}
+\begin{center}
+\input{tikz/rules.tex}
+\end{center}
+
+\begin{itemize}
+  \item Left: rule list (one per role+scope); right: condition builder (comboboxes + numeric
+fields) and \textbf{ordered fallback chain} editor.
+
+  \item \textbf{Dry-run panel} evaluates the rule against live quota state and explains the choice.
+  \item "YAML =>" toggle shows the canonical YAML (decision D2) with live two-way sync.
+\end{itemize}
+\subsection{3.5 Questions tab — Interrogation Center}
+\begin{center}
+\input{tikz/questions.tex}
+\end{center}
+
+Answering unblocks paused tasks automatically (FR-6.3). "Later" keeps tasks paused but never loses the batch.
+
+\subsection{3.6 Activity tab}
+Chronological ledger stream (filterable by project/provider/type): tickets applied, rule decisions, quota events, migrations, alerts. Export CSV/JSON buttons.
+
+\section{4. Project Window (satellite, one per project)}
+Opened from Projects tab (\texttt{Enter}) or \texttt{maestro project open shop}.
+
+\begin{center}
+\input{tikz/project-window.tex}
+\end{center}
+
+\begin{itemize}
+  \item Left: \textbf{TreeView of the DAG} — state glyphs ([ok] done, > running, || paused/blocked,
+o pending), role, live session id. Selecting a task binds the right-side tabs.
+
+  \item Toolbar [?] \textbf{Interview} opens the clarification form for this project; \textbf{AGENTS.md}
+previews the generated file with diff on regeneration; \textbf{Skills} opens the suggestion/install panel.
+
+  \item Right-side tabs (splitter draggable): Overview / Chat / Files / Ledger / (+PRD view).
+\end{itemize}
+\subsection{4.1 Chat / Session view (the heart of single-model interaction)}
+\begin{center}
+\input{tikz/chat.tex}
+\end{center}
+
+\begin{itemize}
+  \item Transcript: RichTextField, streamed; tool calls rendered as collapsible lines with
+ticket status pulled live from the write queue.
+
+  \item Provider combobox: switch model mid-session -> triggers structured-snapshot migration
+(decision D5), with confirmation.
+
+  \item Bottom bar: queue state for this session's tickets, context-window usage, actions
+(Migrate / Snapshot / open full transcript in markdown viewer).
+
+\end{itemize}
+\section{5. Quick Chat (single LLM, no project)}
+\texttt{Ctrl+Q} or Sessions -> Quick Chat. A lightweight window for ad-hoc conversation:
+
+\begin{center}
+\input{tikz/quickchat.tex}
+\end{center}
+
+\begin{itemize}
+  \item Token usage is still ledgered against the provider (quotas stay honest).
+  \item \textbf{Promote to task}: converts the chat into a project task with the transcript as
+context seed. Attach ([clip]) adds files/images for vision-capable models.
+
+\end{itemize}
+\section{6. Settings}
+Menu Tools -> Settings (\texttt{F10}). Modal window: left Accordion/ListBox of sections, right side shows the section's form. \textbf{[Save] applies to TOML live; [Defaults] resets.}
+
+\subsection{Settings inventory}
+\begin{small}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Section & Keys \\
+\midrule
+\textbf{General} & workspace root, default project template, language/locale, autostart behavior, check for updates \\
+\textbf{Appearance} & theme (dark/light/custom), true-color toggle, font-size hint, dashboard density, confirm-on-exit \\
+\textbf{Parallelism} & global session cap (default: CPU heuristic, D6), per-provider concurrency limits, write-queue batch size, per-project fairness quota \\
+\textbf{Quotas \& alerts} & warn thresholds (default 80/95\%), alert action (notify / auto-switch rule / pause role), burn-rate window, renewal reminders \\
+\textbf{Rules} & default question mode (thorough/balanced/minimal — FR-6.4), unmatched-role behavior (ask / cheapest / fail), rule conflict precedence \\
+\textbf{Secrets} & backend: keychain <-> encrypted vault, vault path, master-password timeout, env-var passthrough allow-list \\
+\textbf{Sandbox \& security} & shell allow-list per project, network access for tool-runner, overlay mode for CLI adapters (D3), redaction level \\
+\textbf{Projects} & default DAG parallelism, auto git checkpoints on/off, AGENTS.md regeneration policy (ask/auto), skill registry paths \\
+\textbf{Storage} & config dir, SQLite path, transcript retention days, ledger export format, backup on exit \\
+\textbf{Notifications} & TUI popups on/off, OS toast on/off, sound, quiet hours \\
+\textbf{Keybindings} & full remapping table (searchable) \\
+\textbf{Headless/API} & default \texttt{--json}, NDJSON watch toggle, exit-code verbosity \\
+\textbf{Advanced} & log level, event-bus buffer size, experimental flags, reset all state \\
+\bottomrule
+\end{tabularx}
+\end{small}
+
+\section{7. Interaction Flows}
+\subsection{7.1 First run (onboarding wizard, runs once)}
+\begin{itemize}
+  \item Welcome -> pick workspace root \& theme.
+  \item \textbf{Detect providers}: scans PATH for \texttt{claude}/\texttt{codex}/\texttt{gemini}/\texttt{ollama}, probes
+\texttt{localhost:11434}; shows found list with checkboxes.
+
+  \item \textbf{Add API providers}: endpoint + key (stored to keychain, FR-2) -> auth test ->
+model discovery.
+
+  \item \textbf{Quota setup}: for each provider pick source (auto / manual budget) + plan limits.
+  \item \textbf{Default rules}: proposed from capabilities (e.g. tool-runner -> ollama local);
+user confirms in the rule editor.
+
+  \item Done -> Mission Control. \texttt{maestro config doctor} summary shown.
+\end{itemize}
+\subsection{7.2 New project}
+\begin{itemize}
+  \item \texttt{Ctrl+N} -> wizard: name, dir, stack, git init.
+  \item \textbf{Interview} (interrogator role, FR-6): batched forms; answers stream into PRD.json.
+  \item Maestro drafts \textbf{PRD.md} -> user reviews in markdown tab -> approve -> PRD.json compiled.
+  \item \textbf{AGENTS.md + skill suggestions} generated; user checks which skills to install.
+  \item \textbf{Task DAG proposal} shown in the project's tree; user edits/reorders -> \textbf{Run}.
+  \item Sessions spawn per rule routing; dashboard shows them; questions may reappear
+mid-flight in the app bar ([?] badge).
+
+\end{itemize}
+\subsection{7.3 Quota-exceeded event (no user action needed)}
+\begin{itemize}
+  \item Provider returns 429 / parsed quota hits threshold -> rule re-evaluates (FR-3.3).
+  \item Session migrates via structured snapshot (D5); transcript gains a
+\texttt{── migrated kimi-k2.7 -> glm-5.2 ──} marker.
+
+  \item App bar [!] badge + notification; Activity tab records the decision and its reason.
+\end{itemize}
+\subsection{7.4 Steering a running agent}
+Open session window -> type in steer box -> message injected into agent loop. \texttt{■ Stop} pauses with snapshot; resume continues with context intact.
+
+\section{8. Keybindings (defaults, remappable)}
+\begin{small}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Key & Action \\
+\midrule
+\texttt{Ctrl+Q} & Quick Chat \\
+\texttt{Ctrl+N} & New Project \\
+\texttt{F10} & Settings \\
+\texttt{F1..F6} & Mission Control tabs (Dashboard…Activity) \\
+\texttt{Ctrl+Enter} & Send (chat/steer) \\
+\texttt{Ctrl+P} & Command palette (jump to project/provider/rule/session) \\
+\texttt{Ctrl+D} & Dry-run rule under cursor \\
+\texttt{Ctrl+T} & Tile all satellite windows \\
+\texttt{Esc} & Close dialog / blur input \\
+\texttt{?} & Shortcuts overlay \\
+\bottomrule
+\end{tabularx}
+\end{small}
+
+\section{9. AppCUI Control Mapping}
+\begin{small}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Need & AppCUI control \\
+\midrule
+Tabs everywhere & \texttt{Tab} \\
+Sessions/providers/projects tables & \texttt{ListView} (columns, sort) \\
+Task DAG & \texttt{TreeView} + custom glyphs \\
+Quota gauges & \texttt{ProgressBar} + \texttt{GraphView} (burn sparklines) \\
+PRD view & \texttt{Markdown} viewer \\
+Chat transcript & \texttt{RichTextField} (read-only, appended) \\
+Steer/chat input & \texttt{TextField} (multiline) + \texttt{Button} \\
+Rule builder & \texttt{ComboBox}, \texttt{NumericField}, \texttt{ListBox} + up/down \\
+Settings sections & \texttt{Accordion} / \texttt{ListBox} + panel swap \\
+Project window panes & \texttt{Splitter} \\
+Global status & \texttt{AppBar} segments \\
+Wizards/onboarding & modal \texttt{Window}s + \texttt{Button}s, \texttt{CheckBox}, \texttt{RadioButton} \\
+Questions forms & generated \texttt{RadioButton}/\texttt{CheckBox}/\texttt{TextField}/\texttt{DatePicker} \\
+Toasts/alerts & notification dialogs + app bar badges \\
+Theming & built-in themes, true-color \\
+\bottomrule
+\end{tabularx}
+\end{small}
+
+\section{10. Window Inventory}
+\begin{small}
+\begin{tabularx}{\linewidth}{lXX}
+\toprule
+Window & Kind & Opened from \\
+\midrule
+Mission Control & main (maximized) & startup \\
+Onboarding wizard & modal & first run / Tools \\
+Project window & satellite & Projects tab, \texttt{maestro project open} \\
+Session/Chat window & satellite & dashboard/chat tab, Quick Chat promote \\
+Quick Chat & satellite & \texttt{Ctrl+Q} \\
+Provider window & modal-ish & Providers tab \\
+Provider wizard & modal & Providers -> Add \\
+Rule editor & tab panel & Rules tab \\
+Interrogation form & panel/modal & Questions tab, app bar [?] \\
+Settings & modal & \texttt{F10} \\
+Transcript viewer & satellite & session -> [log] full \\
+File/picker dialogs & stock AppCUI & wizards \\
+\bottomrule
+\end{tabularx}
+\end{small}
+
+\end{document}

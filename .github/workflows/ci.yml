@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt (Maestro packages only — do not follow path deps)
+        run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-cli -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+      - name: headless smoke (no providers configured in CI)
+        run: |
+          cargo run -p maestro-cli -- config doctor
+          cargo run -p maestro-cli -- quota --json
+          cargo run -p maestro-cli -- rule list

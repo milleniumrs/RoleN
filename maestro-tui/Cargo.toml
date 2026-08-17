@@ -1,0 +1,16 @@
+[package]
+name = "maestro-tui"
+description = "AppCUI-based terminal UI for Maestro (PRD FR-10, docs/TUI-DESIGN.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+appcui.workspace = true
+maestro-core.workspace = true
+maestro-providers.workspace = true
+maestro-orchestrator.workspace = true
+maestro-cliadapters.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde_yaml.workspace = true

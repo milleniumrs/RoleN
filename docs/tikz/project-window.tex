@@ -1,0 +1,49 @@
+% Project window with task DAG (TUI-DESIGN 4)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \draw[win] (0,0) rectangle (15.4,6.3);
+  \draw[titlebar] (0,5.8) rectangle (15.4,6.3);
+  \node[monob] at (0.15,6.05) {Project: shop-redesign};
+  \node[monos] at (4.6,6.05) {running};
+
+  % toolbar
+  \foreach \b/\x in {{[> Run]}/0.75, {[|| Pause]}/2.05, {[+ Task]}/3.4, {[? Interview]}/4.9, {[PRD]}/6.5, {[AGENTS.md]}/7.8, {[Skills]}/9.3} {
+    \node[btn] at (\x,5.35) {\b};
+  }
+  \node[btn] at (14.6,5.35) {[settings]};
+  \draw[black!30, line width=0.4pt] (0,5.05) -- (15.4,5.05);
+
+  % ---- left: task DAG ----
+  \node[panelhdr] at (0.15,4.8) {Tasks (DAG)};
+  \foreach \s/\n/\r/\extra/\y in {%
+    {[ok]}/{1 scaffolding}//{}/4.4,
+    {>}/{2 api-layer}/coder/{(*) \#12}/4.0,
+    {>}/{3 frontend}/coder/{(*) \#15}/3.6,
+    {||}/{4 tests}/{}/{deps: 2,3}/3.2,
+    {o}/{5 docs}/{}/{deps: 4}/2.8,
+    {o}/{6 deploy}/{}/{deps: 5}/2.4}
+  {
+    \node[mono] at (0.2,\y) {\s};
+    \node[mono] at (0.85,\y) {\n};
+    \node[mono] at (3.0,\y) {\r};
+    \node[monos] at (4.1,\y) {\extra};
+  }
+  \node[note] at (0.2,1.6) {glyphs: [ok] done, > running,};
+  \node[note] at (0.2,1.25) {|| blocked, o pending};
+  \draw[black!30, line width=0.4pt] (5.6,0.1) -- (5.6,5.0);
+
+  % ---- right: tabs ----
+  \node[tabsel] at (6.35,4.75) {Overview};
+  \foreach \t/\x in {Chat/7.65, Files/8.75, Ledger/9.9, PRD/10.95} {
+    \node[tab] at (\x,4.75) {\t};
+  }
+  \draw[black!30, line width=0.4pt] (5.7,4.5) -- (15.3,4.5);
+  \node[mono] at (5.85,4.15) {goal, PRD summary, progress bars,};
+  \node[mono] at (5.85,3.8) {current blockers, next actions};
+  \node[note] at (5.85,3.2) {Chat: live transcript of the selected task's session + steer input};
+  \node[note] at (5.85,2.8) {Files: claimed paths per task + write-ticket log};
+  \node[note] at (5.85,2.4) {Ledger: tokens / cost per task and provider};
+
+  % progress bars
+  \gauge{5.85}{1.6}{4.0}{0.33}{2/6 tasks done}
+  \gauge{5.85}{1.1}{4.0}{0.62}{context budget}
+\end{tikzpicture}
