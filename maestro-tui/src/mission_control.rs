@@ -922,9 +922,21 @@ impl MissionControl {
                     }
                     if is_crit && !self.alerted.contains(&s.provider_id) {
                         self.alerted.insert(s.provider_id.clone());
+                        let (limit, source) = providers::quota::plan_limit(&s.provider_id)
+                            .map(|(l, src)| (l.to_string(), format!("{src:?}").to_lowercase()))
+                            .unwrap_or_else(|| ("?".into(), "unknown".into()));
                         dialogs::alert(
                             "Quota critical",
-                            &format!("Provider '{}' has used {used}% of its plan limit.\nRouting rules with quota fallbacks will skip it automatically.", s.provider_id),
+                            &format!(
+                                "Provider '{}' has used {used}% of its CONFIGURED limit\n\
+                                 ({limit} tokens, source: {source}).\n\n\
+                                 This is Maestro's own budget setting — not necessarily the\n\
+                                 provider's real plan. Adjust or remove it with:\n  \
+                                 maestro provider budget --id {} --tokens <N>\n  \
+                                 maestro provider budget --id {} --clear\n\n\
+                                 Rules with quota fallbacks will skip this provider meanwhile.",
+                                s.provider_id, s.provider_id, s.provider_id
+                            ),
                         );
                     }
                     if !is_crit {
