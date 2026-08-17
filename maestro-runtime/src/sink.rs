@@ -5,45 +5,73 @@
 
 use crate::error::RuntimeError;
 use maestro_core::types::{TicketState, WriteOp, WriteTicket};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub trait WriteSink: Send + Sync {
     fn apply(&self, ticket: &WriteTicket) -> Result<TicketState, RuntimeError>;
 }
 
-/// Resolve `path` inside `root`, rejecting escapes (sandbox, FR-12.2).
-pub fn resolve_in(root: &Path, path: &str) -> Result<PathBuf, RuntimeError> {
-    let root_c = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let candidate = root_c.join(path);
-    let check = if candidate.exists() {
-        candidate.canonicalize().map_err(RuntimeError::Io)?
-    } else {
-        // New file: canonicalize the deepest existing ancestor and re-append
-        // the missing tail components.
-        let mut existing = candidate.clone();
-        let mut tail: Vec<std::ffi::OsString> = Vec::new();
-        while !existing.exists() {
-            match existing.file_name() {
-                Some(name) => {
-                    tail.push(name.to_os_string());
-                    existing.pop();
+/// Sanitise an agent-supplied path into a safe *relative* path.
+///
+/// Returns None when the path is absolute/drive-qualified or climbs above its
+/// own root via `..`. This is a purely lexical check — it does not depend on
+/// which components happen to exist, so `sub/../../evil.txt` is rejected even
+/// when `sub` was never created.
+fn sanitize_relative(path: &str) -> Option<PathBuf> {
+    let p = Path::new(path);
+    if p.is_absolute() || p.has_root() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
                 }
-                None => break,
             }
+            // on verbatim paths Rust yields ".." as a Normal component
+            Component::Normal(s) if s == ".." => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(s) => out.push(s),
+            Component::Prefix(_) | Component::RootDir => return None,
         }
-        let mut base = existing.canonicalize().unwrap_or(existing);
-        for comp in tail.iter().rev() {
-            base.push(comp);
-        }
-        base
-    };
-    if !check.starts_with(&root_c) {
-        return Err(RuntimeError::Sandbox(format!(
+    }
+    Some(out)
+}
+
+/// Resolve `path` inside `root`, rejecting escapes (sandbox, FR-12.2).
+///
+/// Separators are normalised first: agents routinely emit Windows-style paths
+/// (`src\main.rs`, `..\evil.txt`). Without this, a backslash is just a legal
+/// filename character on Unix, so such a path would silently create a bizarre
+/// file instead of a nested one — and a `..\` traversal would not be seen as
+/// one. After the lexical check, existing paths are canonicalised so symlinks
+/// cannot point outside the workspace either.
+pub fn resolve_in(root: &Path, path: &str) -> Result<PathBuf, RuntimeError> {
+    let escape = || {
+        RuntimeError::Sandbox(format!(
             "path '{path}' escapes the workdir {}",
             root.display()
-        )));
+        ))
+    };
+    let normalized = path.replace('\\', "/");
+    let relative = sanitize_relative(&normalized).ok_or_else(escape)?;
+    let root_c = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let target = root_c.join(relative);
+
+    if target.exists() {
+        let real = target.canonicalize().map_err(RuntimeError::Io)?;
+        if !real.starts_with(&root_c) {
+            return Err(escape());
+        }
+        return Ok(real);
     }
-    Ok(check)
+    Ok(target)
 }
 
 pub struct DirectWriteSink {
@@ -127,8 +155,82 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("maestro-test-escape-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sink = DirectWriteSink::new(dir.clone());
+
+        // traversal, both separator styles, on every platform
         assert!(sink.apply(&ticket("../evil.txt", "x")).is_err());
         assert!(sink.apply(&ticket("..\\evil.txt", "x")).is_err());
+        assert!(sink.apply(&ticket("sub/../../evil.txt", "x")).is_err());
+
+        // absolute paths must never escape the workspace either
+        #[cfg(unix)]
+        assert!(sink.apply(&ticket("/tmp/evil.txt", "x")).is_err());
+        #[cfg(windows)]
+        assert!(sink
+            .apply(&ticket("C:\\Windows\\Temp\\evil.txt", "x"))
+            .is_err());
+
+        // nothing leaked outside the sandbox
+        assert!(!dir.parent().unwrap().join("evil.txt").exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn windows_style_separators_create_nested_paths() {
+        // agents often emit `src\main.rs`; that must land in src/main.rs,
+        // not in a file whose name contains a backslash
+        let dir = std::env::temp_dir().join(format!("maestro-test-seps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sink = DirectWriteSink::new(dir.clone());
+
+        assert_eq!(
+            sink.apply(&ticket("src\\main.rs", "fn main() {}")).unwrap(),
+            TicketState::Applied
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src").join("main.rs")).unwrap(),
+            "fn main() {}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Pure resolver checks: no filesystem state involved, so they behave
+    /// identically on every platform (the CI failure that motivated them was
+    /// a Unix-only backslash issue, and `sub/../../x` only "passed" on
+    /// Windows because the OS rejected a malformed verbatim path).
+    #[test]
+    fn sanitize_relative_rejects_escapes() {
+        for bad in [
+            "../evil.txt",
+            "..\\evil.txt",
+            "sub/../../evil.txt",
+            "a/b/../../../c.txt",
+            "..",
+            "/etc/passwd",
+            "\\\\server\\share\\x",
+        ] {
+            let normalized = bad.replace('\\', "/");
+            assert!(
+                sanitize_relative(&normalized).is_none(),
+                "should have been rejected: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_relative_keeps_legitimate_paths() {
+        let cases = [
+            ("file.txt", "file.txt"),
+            ("./file.txt", "file.txt"),
+            ("src/main.rs", "src/main.rs"),
+            ("src\\main.rs", "src/main.rs"),
+            ("a/b/../c.txt", "a/c.txt"),
+            ("deep/nested/dir/x.md", "deep/nested/dir/x.md"),
+        ];
+        for (input, expected) in cases {
+            let normalized = input.replace('\\', "/");
+            let got = sanitize_relative(&normalized).expect(input);
+            let expected: PathBuf = expected.split('/').collect();
+            assert_eq!(got, expected, "input: {input}");
+        }
     }
 }
