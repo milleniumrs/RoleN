@@ -1,6 +1,6 @@
 # Maestro
 
-**A conductor for LLM-powered development** — a cross-platform TUI + headless CLI, written in Rust on top of [AppCUI](https://github.com/gdt050579/AppCUI-rs).
+**Management layer for AI CLI tools and LLM API subscriptions**, built on [AppCUI](https://github.com/gdt050579/AppCUI-rs) (Rust) — a cross-platform TUI plus a headless CLI.
 
 Maestro lets a developer who owns **several LLM subscriptions and CLI tools** treat them as one orchestra: register every provider once, assign models to **roles** via quota-aware **rules**, split projects into **parallel agent tasks** that can never corrupt each other's files, and watch tokens, costs and quotas live.
 
@@ -94,4 +94,4 @@ maestro batch --spec tasks.yaml --workdir . --watch   # parallel DAG, NDJSON eve
 
 ## License
 
-MIT — see [LICENSE-MIT](LICENSE-MIT).
+MIT — see [LICENSE](LICENSE).
