@@ -67,6 +67,25 @@ Key design guarantees:
 - **Secrets never in config** — OS keychain (Windows Credential Manager / macOS Keychain / Secret Service), age-encrypted vault fallback, `MAESTRO_KEY_*` env passthrough for CI.
 - **Provider-agnostic history** — sessions migrate between providers on quota/overload events without losing context.
 
+## Download
+
+Prebuilt binaries are attached to every [release](../../releases):
+
+| OS | Architecture | Asset |
+|---|---|---|
+| Windows | x86_64 | `maestro-<version>-windows-x86_64.zip` |
+| Linux | x86_64 | `maestro-<version>-linux-x86_64.tar.gz` |
+| Linux | aarch64 | `maestro-<version>-linux-aarch64.tar.gz` |
+| macOS | Apple Silicon | `maestro-<version>-macos-aarch64.tar.gz` |
+| macOS | Intel | `maestro-<version>-macos-x86_64.tar.gz` |
+
+Each archive holds the `maestro` binary, this README, the licence and the design PDF; `SHA256SUMS` is published alongside (`sha256sum -c SHA256SUMS`). Unpack anywhere on your `PATH` and run `maestro config doctor`.
+
+Releases are cut by pushing a tag — `git tag v0.1.0 && git push origin v0.1.0` — which triggers `.github/workflows/release.yml` to build every target and publish the assets.
+
+On Linux the TUI needs ncurses and X11 clipboard libraries at runtime:
+`sudo apt install libncurses6 libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0`
+
 ## Quick start
 
 ```sh
