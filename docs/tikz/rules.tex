@@ -1,0 +1,47 @@
+% Mission Control - Rules tab with dry-run (TUI-DESIGN 3.4)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  % ----- rule list -----
+  \draw[panel] (0,0) rectangle (7.0,5.6);
+  \node[panelhdr] at (0.15,5.42) {rules};
+  \draw[fill=black!10, draw=none] (0.1,4.85) rectangle (6.9,5.2);
+  \foreach \r/\y in {%
+    {(*) coder -> kimi / cloud / local}/5.02,
+    {( ) planner -> kimi-k3 -> claude}/4.6,
+    {( ) summarizer -> kimi-k3 / opus}/4.18,
+    {( ) tool-runner -> ollama local}/3.76,
+    {( ) img-reader -> mistral-small}/3.34}
+  {
+    \node[mono] at (0.25,\y) {\r};
+  }
+  \node[note] at (0.25,2.6) {one rule per role + scope;};
+  \node[note] at (0.25,2.25) {priority decides evaluation order};
+
+  % ----- editor -----
+  \draw[panel] (7.4,0) rectangle (15.4,5.6);
+  \node[panelhdr] at (7.55,5.42) {editor};
+
+  \node[lbl] at (7.6,5.0) {role:};
+  \node[field, anchor=west] at (8.6,5.0) {coder \quad v};
+  \node[lbl] at (7.6,4.5) {when:};
+  \node[field, anchor=west] at (8.6,4.5) {quota\_remaining\% < 20 \; (kimi)};
+
+  \node[lbl] at (7.6,4.0) {then:};
+  \foreach \i/\m/\y in {1/{kimi/kimi-for-coding}/4.0, 2/{ollama-cloud/kimi-k2.7-code}/3.55, 3/{ollama-local/qwen2.5-coder}/3.1} {
+    \node[mono] at (8.6,\y) {\i.};
+    \node[field, anchor=west] at (9.0,\y) {\m};
+  }
+  \foreach \b/\x in {{[up]}/8.7, {[down]}/9.7, {[+ add]}/10.9, {[- del]}/12.0} {
+    \node[btn] at (\x,2.55) {\b};
+  }
+
+  \node[lbl] at (7.6,2.0) {scope:};
+  \node[mono] at (8.6,2.0) {(*) all projects \quad ( ) shop};
+
+  \draw[black!25, line width=0.3pt] (7.5,1.65) -- (15.3,1.65);
+  \node[btn] at (8.3,1.3) {[Dry-run]};
+  \node[monos] at (9.1,1.3) {coder right now -> kimi/kimi-for-coding};
+  \node[monos] at (9.1,1.0) {skipped: none - kimi quota 51\% >= min 20\%};
+  \foreach \b/\x in {{[Save]}/8.2, {[Cancel]}/9.3, {YAML view}/10.6} {
+    \node[btn] at (\x,0.45) {\b};
+  }
+\end{tikzpicture}

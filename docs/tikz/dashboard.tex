@@ -1,0 +1,60 @@
+% Mission Control - Dashboard tab (TUI-DESIGN 3.1)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  % tab strip
+  \node[tabsel] at (1.0,7.35) {Dashboard};
+  \foreach \t/\x in {Projects/2.75, Providers/4.5, Rules/6.1, {Questions (2)}/7.85, Activity/9.85} {
+    \node[tab] at (\x,7.35) {\t};
+  }
+  \draw[black!35, line width=0.4pt] (0,7.05) -- (15.4,7.05);
+
+  % ---------- Active sessions ----------
+  \draw[panel] (0,3.75) rectangle (7.5,6.85);
+  \node[panelhdr] at (0.15,6.7) {Active Sessions};
+  \foreach \g/\id/\role/\model/\proj/\tok/\y in {%
+    >/\#12/coder/kimi-k2.7/shop/12k/6.35,
+    >/\#13/planner/kimi-k3/shop/3.1k/5.95,
+    ||/\#14/doc-wr/glm-5.2/blog/890/5.55,
+    >/\#15/tool/ollama:qwen3/shop/45k/5.15,
+    >/\#16/img-rd/claude-opus/blog/2.2k/4.75}
+  {
+    \node[mono] at (0.2,\y) {\g};
+    \node[mono] at (0.6,\y) {\id};
+    \node[mono] at (1.35,\y) {\role};
+    \node[mono] at (2.85,\y) {\model};
+    \node[mono] at (5.0,\y) {\proj};
+    \node[mono] at (6.5,\y) {\tok};
+  }
+  \node[note] at (0.2,4.15) {double-click -> session window};
+
+  % ---------- Providers with quota gauges ----------
+  \draw[panel] (7.9,3.75) rectangle (15.4,6.85);
+  \node[panelhdr] at (8.05,6.7) {Providers};
+  \foreach \n/\f/\l/\y in {%
+    Claude/0.78/{78\% \textasciitilde 12d}/6.28,
+    Kimi/0.51/{51\% \textasciitilde 6d}/5.88,
+    GLM/0.92/{92\%}/5.48}
+  {
+    \node[mono] at (8.05,\y+0.11) {\n};
+    \gauge{9.6}{\y}{2.8}{\f}{\l}
+  }
+  \node[mono] at (8.05,5.08) {Ollama cloud};
+  \node[monos] at (10.4,5.08) {unmetered - 45k today};
+  \node[mono] at (8.05,4.68) {Ollama local};
+  \node[monos] at (10.4,4.68) {local - 12k today};
+  \node[warn] at (14.9,5.88) {[!]};
+
+  % ---------- Write queue ----------
+  \draw[panel] (0,0.15) rectangle (7.5,3.45);
+  \node[panelhdr] at (0.15,3.3) {Write Queue};
+  \node[mono] at (0.2,2.85) {depth 3 - applied 1,204 - rejected 2};
+  \sparkline{0.25}{1.35}{0.42}{1.1}{0.95,0.9,0.55,0.3,0.5,0.65,0.85,0.4,0.6,0.75,0.35,0.5,0.8,0.45}
+  \node[note] at (0.25,0.75) {last 60s - click for the ticket journal};
+
+  % ---------- Alerts ----------
+  \draw[panel] (7.9,0.15) rectangle (15.4,3.45);
+  \node[panelhdr] at (8.05,3.3) {Alerts};
+  \node[warn] at (8.25,2.85) {[!]};
+  \node[mono] at (8.6,2.85) {Kimi burn 2.1x -> ~6 days left};
+  \node[mono] at (8.05,2.4) {[?] 2 question batches unanswered};
+  \node[note] at (8.05,1.6) {thresholds: warn 80\%, critical 95\%};
+\end{tikzpicture}

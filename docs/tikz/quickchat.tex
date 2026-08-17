@@ -1,0 +1,26 @@
+% Quick Chat window (TUI-DESIGN 5)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \draw[win] (0,0) rectangle (11.0,5.2);
+  \draw[titlebar] (0,4.7) rectangle (11.0,5.2);
+  \node[monob] at (0.15,4.95) {Quick Chat};
+
+  \node[lbl] at (0.15,4.35) {provider:};
+  \node[field, anchor=west] at (1.3,4.35) {anthropic \; v};
+  \node[lbl] at (4.3,4.35) {model:};
+  \node[field, anchor=west] at (5.2,4.35) {claude-haiku-4-5 \; v};
+  \node[mono] at (9.6,4.35) {78\%};
+
+  \draw[panel] (0.15,1.3) rectangle (10.85,4.05);
+  \node[monob] at (0.3,3.75) {you};
+  \node[mono] at (0.95,3.75) {summarise the write-queue design in 2 lines};
+  \node[monob] at (0.3,3.3) {[AI]};
+  \node[mono] at (0.95,3.3) {Agents submit tickets; the orchestrator applies them};
+  \node[mono] at (0.95,2.95) {per path in FIFO order with base-hash checks.};
+  \node[note] at (0.3,2.3) {usage is ledgered against the provider - quotas stay honest};
+
+  \draw[field] (0.15,0.55) rectangle (8.4,1.1);
+  \node[mono] at (0.3,0.82) {\_};
+  \node[btn] at (9.1,0.82) {[Send]};
+  \node[btn] at (10.3,0.82) {[Close]};
+  \node[monos] at (0.15,0.25) {tok 1.2k - \$0.01 - session recorded in the ledger};
+\end{tikzpicture}

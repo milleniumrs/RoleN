@@ -1,0 +1,18 @@
+[package]
+name = "maestro-core"
+description = "Core types, configuration, secrets and ledger for Maestro (UI-free)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+dirs.workspace = true
+keyring.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+age = "0.10"

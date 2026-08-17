@@ -1,0 +1,35 @@
+% Global chrome: menu bar, desktop, app bar (TUI-DESIGN 2)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  % window
+  \draw[win] (0,0) rectangle (15.4,5.4);
+  \draw[titlebar] (0,4.9) rectangle (15.4,5.4);
+  \node[monob] at (0.15,5.15) {Maestro};
+
+  % menu bar
+  \draw[strip] (0,4.35) rectangle (15.4,4.9);
+  \foreach \m [count=\i from 0] in {File,Project,Providers,Rules,Sessions,View,Tools,Help} {
+    \node[mono] at ({0.2+\i*1.32},4.62) {\m};
+  }
+
+  % desktop
+  \node[note] at (5.05,2.7) {(desktop: windows live here)};
+
+  % app bar
+  \draw[strip] (0,0) rectangle (15.4,0.55);
+  \node[mono] at (0.15,0.28) {(*) 4 sessions};
+  \node[mono] at (2.45,0.28) {61.2k tok today};
+  \node[mono] at (4.85,0.28) {\$1.84};
+  \node[mono] at (6.05,0.28) {queue: 3};
+  \node[mono] at (7.65,0.28) {[?] 2 questions};
+  \node[warn] at (10.4,0.28) {[!] 1};
+  \node[mono] at (14.2,0.28) {14:32};
+  \foreach \x in {2.3,4.7,5.9,7.5,10.0,10.85,14.05} {
+    \draw[black!30, line width=0.3pt] (\x,0.08) -- (\x,0.47);
+  }
+
+  % callouts
+  \draw[arrowto] (15.9,4.62) -- (15.45,4.62);
+  \node[callout] at (15.95,4.62) {menu bar};
+  \draw[arrowto] (15.9,0.28) -- (15.45,0.28);
+  \node[callout] at (15.95,0.28) {app bar};
+\end{tikzpicture}

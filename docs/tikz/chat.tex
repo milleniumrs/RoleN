@@ -1,0 +1,42 @@
+% Chat / session view (TUI-DESIGN 4.1)
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \draw[win] (0,0) rectangle (15.4,6.0);
+  \draw[titlebar] (0,5.5) rectangle (15.4,6.0);
+  \node[monob] at (0.15,5.75) {Session \#12};
+  \node[monos] at (2.2,5.75) {shop-redesign - task "api-layer"};
+
+  % status line
+  \node[mono] at (0.15,5.15) {role: coder};
+  \node[lbl] at (2.4,5.15) {provider:};
+  \node[field, anchor=west] at (3.4,5.15) {kimi-k2.7 \; v};
+  \node[mono] at (6.6,5.15) {04:12};
+  \node[mono] at (8.0,5.15) {tok in 8.2k / out 1.4k};
+  \node[mono] at (12.4,5.15) {\$0.03};
+  \draw[black!30, line width=0.4pt] (0,4.9) -- (15.4,4.9);
+
+  % transcript
+  \foreach \tag/\txt/\y in {%
+    {[AI]}/{I'll add the cart endpoints. Reading src/api/mod.rs ...}/4.5,
+    {[tool]}/{submit\_write src/api/cart.rs -> ticket \#1204 [ok] applied (base hash matched)}/4.05,
+    {[tool]}/{run\_shell `cargo check` -> ok}/3.6,
+    {[AI]}/{Endpoints done. Summary: 3 handlers, 2 tests, error mapping wired.}/3.15}
+  {
+    \node[monob] at (0.2,\y) {\tag};
+    \node[mono] at (1.3,\y) {\txt};
+  }
+  \node[note] at (0.2,2.5) {tool calls render as collapsible lines with live ticket status from the write queue};
+
+  % steer input
+  \draw[field] (0.15,1.35) rectangle (12.4,1.95);
+  \node[mono] at (0.3,1.65) {steer: also handle out-of-stock errors\_};
+  \node[btn] at (13.1,1.65) {[Send]};
+  \node[btn] at (14.4,1.65) {[Stop]};
+
+  % footer
+  \draw[black!30, line width=0.4pt] (0,1.0) -- (15.4,1.0);
+  \node[mono] at (0.15,0.62) {queue: 1 ticket pending};
+  \gauge{4.2}{0.51}{2.6}{0.41}{context 41\%}
+  \foreach \b/\x in {{[Migrate provider]}/9.6, {[Snapshot]}/11.9, {[full transcript]}/13.8} {
+    \node[btn] at (\x,0.62) {\b};
+  }
+\end{tikzpicture}

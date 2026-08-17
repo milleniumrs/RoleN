@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "maestro-core",
+    "maestro-orchestrator",
+    "maestro-providers",
+    "maestro-runtime",
+    "maestro-cliadapters",
+    "maestro-tui",
+    "maestro-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+appcui = "=0.4.17"
+maestro-core = { path = "maestro-core" }
+maestro-tui = { path = "maestro-tui" }
+maestro-providers = { path = "maestro-providers" }
+maestro-runtime = { path = "maestro-runtime" }
+maestro-orchestrator = { path = "maestro-orchestrator" }
+maestro-cliadapters = { path = "maestro-cliadapters" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+dirs = "5"
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+
+[profile.release]
+lto = "thin"
