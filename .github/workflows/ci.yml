@@ -8,8 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # CI runners have no OS keychain (Linux) / an unusable one; this makes the
-  # age-encrypted vault fallback the active secret backend for tests.
+  # CI runners have no usable OS keychain, so pin the secret backend to the
+  # age-encrypted vault (and give it a password) for deterministic runs.
+  MAESTRO_SECRETS_BACKEND: vault
   MAESTRO_VAULT_PASSWORD: ci-vault-password
 
 jobs:
@@ -26,6 +27,15 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libncurses-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: fmt (Maestro packages only — do not follow path deps)
         run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-cli -- --check

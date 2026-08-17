@@ -74,18 +74,27 @@ pub fn run_all() -> Vec<Check> {
     }
 
     // 4. secret backend: OS keychain, else age vault fallback (FR-2.1/FR-2.2)
-    match secrets::keychain_probe() {
-        Ok(()) => out.push(Check::ok("keychain", "roundtrip ok (primary backend)")),
-        Err(e) => match crate::vault::probe() {
-            Ok(()) => out.push(Check::ok(
-                "secrets vault",
-                format!("keychain unavailable ({e}); age vault fallback ok"),
-            )),
-            Err(ve) => out.push(Check::fail(
-                "secrets",
-                format!("keychain: {e}; vault: {ve} (set MAESTRO_VAULT_PASSWORD or fix keychain)"),
-            )),
-        },
+    let forced = std::env::var(secrets::BACKEND_ENV).ok();
+    match secrets::active_backend() {
+        secrets::Backend::Keychain => out.push(Check::ok("secrets", "OS keychain (roundtrip ok)")),
+        secrets::Backend::Vault => out.push(Check::ok(
+            "secrets",
+            match &forced {
+                Some(v) => format!(
+                    "age vault (roundtrip ok; forced by {}={v})",
+                    secrets::BACKEND_ENV
+                ),
+                None => "age vault (roundtrip ok; OS keychain unavailable)".to_string(),
+            },
+        )),
+        secrets::Backend::None => out.push(Check::fail(
+            "secrets",
+            format!(
+                "no usable backend: the OS keychain failed and the vault is locked. \
+                 Set MAESTRO_VAULT_PASSWORD (optionally {}=vault), or fix the keychain.",
+                secrets::BACKEND_ENV
+            ),
+        )),
     }
 
     // 5. SQLite ledger open + schema + write probe

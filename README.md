@@ -64,7 +64,7 @@ Cargo workspace crates:
 Key design guarantees:
 
 - **Single writer** — no agent ever touches the filesystem directly, including wrapped CLI tools (overlay + harvest).
-- **Secrets never in config** — OS keychain (Windows Credential Manager / macOS Keychain / Secret Service), age-encrypted vault fallback, `MAESTRO_KEY_*` env passthrough for CI.
+- **Secrets never in config** — OS keychain (Windows Credential Manager / macOS Keychain / Secret Service), age-encrypted vault fallback, `MAESTRO_KEY_*` env passthrough for CI. Force a backend with `MAESTRO_SECRETS_BACKEND=vault|keychain` (headless machines) and unlock the vault with `MAESTRO_VAULT_PASSWORD`.
 - **Provider-agnostic history** — sessions migrate between providers on quota/overload events without losing context.
 
 ## Download

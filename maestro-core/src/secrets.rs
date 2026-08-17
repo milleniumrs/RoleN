@@ -27,8 +27,37 @@ pub fn env_var_name(key_ref: &str) -> String {
     format!("MAESTRO_KEY_{sanitized}")
 }
 
+/// Which storage backend is usable, for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Keychain,
+    Vault,
+    None,
+}
+
+/// Force a specific backend, e.g. on headless/CI machines where the OS
+/// keychain is absent or would block: `MAESTRO_SECRETS_BACKEND=vault`.
+pub const BACKEND_ENV: &str = "MAESTRO_SECRETS_BACKEND";
+
+pub(crate) fn parse_backend(s: &str) -> Option<Backend> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "vault" | "age" | "file" => Some(Backend::Vault),
+        "keychain" | "os" | "keyring" => Some(Backend::Keychain),
+        _ => None,
+    }
+}
+
+fn forced_backend() -> Option<Backend> {
+    std::env::var(BACKEND_ENV)
+        .ok()
+        .and_then(|v| parse_backend(&v))
+}
+
 /// Store a secret: keychain first, encrypted vault as fallback.
 pub fn set_secret(key_ref: &str, value: &str) -> Result<(), CoreError> {
+    if forced_backend() == Some(Backend::Vault) {
+        return vault::set(key_ref, value);
+    }
     match entry(key_ref).and_then(|e| e.set_password(value).map_err(CoreError::from)) {
         Ok(()) => Ok(()),
         Err(keychain_err) => {
@@ -46,6 +75,9 @@ pub fn get_secret(key_ref: &str) -> Result<String, CoreError> {
     if let Ok(v) = std::env::var(env_var_name(key_ref)) {
         return Ok(v);
     }
+    if forced_backend() == Some(Backend::Vault) {
+        return vault::get(key_ref);
+    }
     match entry(key_ref).and_then(|e| e.get_password().map_err(CoreError::from)) {
         Ok(v) => Ok(v),
         Err(keychain_err) => {
@@ -59,23 +91,24 @@ pub fn get_secret(key_ref: &str) -> Result<String, CoreError> {
 }
 
 pub fn delete_secret(key_ref: &str) -> Result<(), CoreError> {
-    // best effort on both backends
-    let _ = entry(key_ref).and_then(|e| e.delete_credential().map_err(CoreError::from));
+    if forced_backend() != Some(Backend::Vault) {
+        // best effort on the keychain
+        let _ = entry(key_ref).and_then(|e| e.delete_credential().map_err(CoreError::from));
+    }
     if vault::is_available() {
         let _ = vault::delete(key_ref);
     }
     Ok(())
 }
 
-/// Which storage backend is usable, for diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Backend {
-    Keychain,
-    Vault,
-    None,
-}
-
 pub fn active_backend() -> Backend {
+    if forced_backend() == Some(Backend::Vault) {
+        return if vault::probe().is_ok() {
+            Backend::Vault
+        } else {
+            Backend::None
+        };
+    }
     if keychain_probe().is_ok() {
         Backend::Keychain
     } else if vault::is_available() && vault::probe().is_ok() {
@@ -98,5 +131,27 @@ pub fn keychain_probe() -> Result<(), CoreError> {
             "roundtrip".into(),
             "value mismatch".into(),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_override_parsing() {
+        assert_eq!(parse_backend("vault"), Some(Backend::Vault));
+        assert_eq!(parse_backend(" AGE "), Some(Backend::Vault));
+        assert_eq!(parse_backend("keychain"), Some(Backend::Keychain));
+        assert_eq!(parse_backend("Keyring"), Some(Backend::Keychain));
+        assert_eq!(parse_backend("nonsense"), None);
+        assert_eq!(parse_backend(""), None);
+    }
+
+    #[test]
+    fn env_var_names_are_sanitized() {
+        assert_eq!(env_var_name("provider-kimi"), "MAESTRO_KEY_PROVIDER_KIMI");
+        assert_eq!(env_var_name("provider:kimi"), "MAESTRO_KEY_PROVIDER_KIMI");
+        assert_eq!(env_var_name("a.b c"), "MAESTRO_KEY_A_B_C");
     }
 }
