@@ -2,10 +2,12 @@
 """Build the Maestro documentation artefacts.
 
   docs/TUI-DESIGN.md   --md2latex-->  TUI-DESIGN.tex  --xelatex-->  TUI-DESIGN.pdf
-  docs/tikz/architecture.tex          architecture.tex --xelatex--> architecture.pdf
-                                                      --pdftocairo--> architecture.png
 
-Requires MiKTeX (xelatex, pdftocairo) on PATH. Run from anywhere:
+docs/architecture.png is NOT built here: it is exported by hand from
+docs/architecture.drawio (draw.io > File > Export as > PNG). This script used
+to regenerate it from a TikZ source and would silently overwrite that export.
+
+Requires MiKTeX (xelatex) on PATH. Run from anywhere:
     python docs/build.py
 """
 import os
@@ -40,22 +42,18 @@ def clean_aux():
 
 def main():
     require("xelatex")
-    require("pdftocairo")
 
     print("design document:")
     run([sys.executable, "md2latex.py", "TUI-DESIGN.md", "TUI-DESIGN.tex"])
     for _ in range(2):  # second pass resolves the table of contents
         run(["xelatex", "-interaction=nonstopmode", "TUI-DESIGN.tex"])
 
-    print("architecture diagram:")
-    run(["xelatex", "-interaction=nonstopmode", "architecture.tex"])
-    run(["pdftocairo", "-png", "-r", "140", "-singlefile", "architecture.pdf", "architecture"])
-
     clean_aux()
     print("\nartefacts:")
-    for name in ("TUI-DESIGN.pdf", "architecture.pdf", "architecture.png"):
+    for name in ("TUI-DESIGN.pdf",):
         path = os.path.join(DOCS, name)
         print(f"  {name:<20} {os.path.getsize(path) // 1024} KB")
+    print("  architecture.png     exported by hand from architecture.drawio")
 
 
 if __name__ == "__main__":

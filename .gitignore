@@ -27,3 +27,7 @@ PRD.json
 *.out
 *.toc
 *.synctex.gz
+
+# draw.io autosave backups
+.$*.bkp
+.$*.drawio
