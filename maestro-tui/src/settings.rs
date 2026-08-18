@@ -86,9 +86,7 @@ impl SettingsWindow {
         let crit = cfg.quotas.crit_pct.to_string();
         let theme_idx = crate::theme::AVAILABLE
             .iter()
-            .position(|(n, _)| {
-                *n == crate::theme::to_name(crate::theme::resolve(&cfg.general.theme))
-            })
+            .position(|(n, _)| Some(*n) == crate::theme::canonical(&cfg.general.theme))
             .unwrap_or(0) as u32;
         let mode_idx = match cfg.general.question_mode {
             QuestionMode::Thorough => 0,

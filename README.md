@@ -106,7 +106,17 @@ maestro project build --name my-app  # PRD.md/PRD.json + AGENTS.md + skills + ta
 maestro batch --spec tasks.yaml --workdir . --watch   # parallel DAG, NDJSON events
 ```
 
-Colour themes: **Tools → Theme** (`default`, `dark-gray`, `light`) switches live and is remembered in `config.toml`; the Settings window (`F10`) offers the same picker.
+Colour themes: **Tools → Theme** switches live and is remembered in `config.toml`; the Settings window (`F10`) offers the same picker.
+
+| Theme | Look |
+|---|---|
+| `default` / `dark-gray` / `light` | AppCUI built-in palettes |
+| `dark` | white on black |
+| `hacker` | green phosphor on black |
+| `fancy` | pink background, dark text |
+| `rainbow` | a different hue per surface |
+| `ocean` | cyan on deep blue |
+| `amber` | retro amber CRT |
 
 ## Documentation
 
