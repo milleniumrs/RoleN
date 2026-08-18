@@ -122,7 +122,7 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
     conector.notify(CliTaskMsg::Finished(msg));
 }
 
-#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+Doctor+About+Exit)]
+#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+ThemePaper+ThemeSky+ThemeMint+ThemeSand+Doctor+About+Exit)]
 pub struct MissionControl {
     // menus (app bar, left side)
     m_file: Handle<MenuButton>,
@@ -265,16 +265,23 @@ impl MissionControl {
                 "class: MissionControl, items=[
                 {'&Settings', F10, cmd:Settings},
                 {'&Theme', items=[
-                    {'&Default', cmd:ThemeDefault},
-                    {'Dark &Gray', cmd:ThemeDarkGray},
-                    {'&Light', cmd:ThemeLight},
-                    {-},
-                    {'Dar&k (white on black)', cmd:ThemeDark},
-                    {'&Hacker (green phosphor)', cmd:ThemeHacker},
-                    {'&Fancy (pink)', cmd:ThemeFancy},
-                    {'&Rainbow', cmd:ThemeRainbow},
-                    {'&Ocean', cmd:ThemeOcean},
-                    {'&Amber (retro CRT)', cmd:ThemeAmber}
+                    {'&Dark', items=[
+                        {'&Default', cmd:ThemeDefault},
+                        {'Dark &Gray', cmd:ThemeDarkGray},
+                        {'&Black (white on black)', cmd:ThemeDark},
+                        {'&Hacker (green phosphor)', cmd:ThemeHacker},
+                        {'&Ocean', cmd:ThemeOcean},
+                        {'&Amber (retro CRT)', cmd:ThemeAmber},
+                        {'&Rainbow', cmd:ThemeRainbow}
+                    ]},
+                    {'&Light', items=[
+                        {'&Light', cmd:ThemeLight},
+                        {'&Paper (white, dark ink)', cmd:ThemePaper},
+                        {'&Fancy (pink)', cmd:ThemeFancy},
+                        {'&Sky (pale cyan)', cmd:ThemeSky},
+                        {'&Mint (pale green)', cmd:ThemeMint},
+                        {'S&and (warm)', cmd:ThemeSand}
+                    ]}
                 ]},
                 {-},
                 {'Config &Doctor', F9, cmd:Doctor}
@@ -307,8 +314,11 @@ impl MissionControl {
         w.st_questions = w.appbar().add(appbar::Label::new("❓ 0", 3, Side::Right));
 
         // ---- the six fixed tabs (TUI-DESIGN.md §3) ----
+        // TransparentBackground: the tab body inherits the window colour, so
+        // the active theme's palette shows through instead of the tab
+        // control's own (theme-private, always grey) surface
         let mut t =
-            tab!("tabs:[Dashboard,Projects,Providers,Rules,Questions,Activity],l:0,t:0,r:0,b:0");
+            tab!("tabs:[Dashboard,Projects,Providers,Rules,Questions,Activity],l:0,t:0,r:0,b:0,flags: TransparentBackground");
 
         // Dashboard
         w.d_providers = t.add(0, label!("'Providers: loading…',x:2,y:0,w:76,h:1"));
@@ -1060,6 +1070,10 @@ impl MenuEvents for MissionControl {
             ThemeRainbow => self.switch_theme("rainbow"),
             ThemeOcean => self.switch_theme("ocean"),
             ThemeAmber => self.switch_theme("amber"),
+            ThemePaper => self.switch_theme("paper"),
+            ThemeSky => self.switch_theme("sky"),
+            ThemeMint => self.switch_theme("mint"),
+            ThemeSand => self.switch_theme("sand"),
         }
     }
 }

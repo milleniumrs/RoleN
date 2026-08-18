@@ -1,0 +1,12 @@
+\documentclass[border=6pt]{standalone}
+\usepackage{fontspec}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc,fit,backgrounds,arrows.meta}
+\setmainfont{Georgia}
+\begin{document}
+\begin{tikzpicture}[box/.style={draw=black!55, rounded corners=2pt, align=center, inner sep=4pt, line width=0.5pt, fill=white}]
+\node[box, minimum width=3cm] (a) at (0,0) {\textbf{Rule engine}\\[-1pt]{\scriptsize roles $\rightarrow$ providers}};
+\node[box] (b) at (5,0) {plain};
+\draw[-{Latex[length=4pt]}] (a) -- (b);
+\end{tikzpicture}
+\end{document}

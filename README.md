@@ -108,15 +108,17 @@ maestro batch --spec tasks.yaml --workdir . --watch   # parallel DAG, NDJSON eve
 
 Colour themes: **Tools → Theme** switches live and is remembered in `config.toml`; the Settings window (`F10`) offers the same picker.
 
-| Theme | Look |
-|---|---|
-| `default` / `dark-gray` / `light` | AppCUI built-in palettes |
-| `dark` | white on black |
-| `hacker` | green phosphor on black |
-| `fancy` | pink background, dark text |
-| `rainbow` | a different hue per surface |
-| `ocean` | cyan on deep blue |
-| `amber` | retro amber CRT |
+| Dark themes | Look | Light themes | Look |
+|---|---|---|---|
+| `default` | AppCUI default | `light` | AppCUI light |
+| `dark-gray` | high-contrast grey | `paper` | white paper, dark ink |
+| `dark` | white on black | `fancy` | pink background, dark text |
+| `hacker` | green phosphor on black | `sky` | pale cyan, navy ink |
+| `ocean` | cyan on deep blue | `mint` | pale green, forest ink |
+| `amber` | retro amber CRT | `sand` | warm sand, brown ink |
+| `rainbow` | a different hue per surface | | |
+
+`python docs/theme_report.py` renders every theme offscreen and reports the background colours it actually paints (used to verify light/dark claims).
 
 ## Documentation
 
