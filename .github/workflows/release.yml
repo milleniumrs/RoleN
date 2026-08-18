@@ -15,6 +15,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   BIN: maestro
+  # on workflow_dispatch GITHUB_REF_NAME is the *branch*, so the explicit tag
+  # input must win; on a tag push there is no input and ref_name is the tag
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -51,7 +54,11 @@ jobs:
             archive: tar.gz
 
     steps:
+      # without an explicit ref a manual run builds the default branch and
+      # then publishes it under the tag name — build the tag that was asked for
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.VERSION }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -77,9 +84,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # on workflow_dispatch GITHUB_REF_NAME is the *branch*, so the
-          # explicit tag input must win; on a tag push there is no input
-          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           STAGE="${BIN}-${VERSION}-${{ matrix.label }}"
           mkdir -p "dist/${STAGE}"
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -112,8 +116,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-
+      # only the artifacts are published here, so no source checkout is needed
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -127,8 +130,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Maestro ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ env.VERSION }}
+          name: Maestro ${{ env.VERSION }}
           draft: false
           generate_release_notes: true
           body: |
