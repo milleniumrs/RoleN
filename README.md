@@ -106,6 +106,8 @@ maestro project build --name my-app  # PRD.md/PRD.json + AGENTS.md + skills + ta
 maestro batch --spec tasks.yaml --workdir . --watch   # parallel DAG, NDJSON events
 ```
 
+Colour themes: **Tools → Theme** (`default`, `dark-gray`, `light`) switches live and is remembered in `config.toml`; the Settings window (`F10`) offers the same picker.
+
 ## Documentation
 
 - `docs/TUI-DESIGN.md` — UI wireframes, interaction flows, settings inventory (also as PDF in `docs/`)

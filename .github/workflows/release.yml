@@ -20,6 +20,8 @@ jobs:
   build:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # never let an unavailable runner label hang a release for hours
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -40,8 +42,11 @@ jobs:
             os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+          # GitHub retired the macos-13 (Intel) image, so the x86_64 binary is
+          # cross-compiled from the Apple Silicon runner instead of waiting
+          # forever for an Intel runner that will never be assigned.
           - label: macos-x86_64
-            os: macos-13
+            os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
 

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::add_provider::AddProviderDialog;
-use crate::{provider_detail, quick_chat, settings, transcript_view};
+use crate::{provider_detail, quick_chat, settings, theme, transcript_view};
 
 #[derive(ListItem)]
 struct ProviderRow {
@@ -122,7 +122,7 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
     conector.notify(CliTaskMsg::Finished(msg));
 }
 
-#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+Doctor+About+Exit)]
+#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+Doctor+About+Exit)]
 pub struct MissionControl {
     // menus (app bar, left side)
     m_file: Handle<MenuButton>,
@@ -264,6 +264,12 @@ impl MissionControl {
             menu!(
                 "class: MissionControl, items=[
                 {'&Settings', F10, cmd:Settings},
+                {'&Theme', items=[
+                    {'&Default', cmd:ThemeDefault},
+                    {'Dark &Gray', cmd:ThemeDarkGray},
+                    {'&Light', cmd:ThemeLight}
+                ]},
+                {-},
                 {'Config &Doctor', F9, cmd:Doctor}
             ]"
             ),
@@ -955,6 +961,17 @@ impl MissionControl {
         }
     }
 
+    /// Switch the colour theme live and remember it for next start.
+    fn switch_theme(&mut self, name: &str) {
+        theme::apply(name);
+        if let Err(e) = theme::persist(name) {
+            dialogs::error(
+                "Theme",
+                &format!("applied, but could not save to config: {e}"),
+            );
+        }
+    }
+
     fn health_check(&mut self) {
         let reg = providers::ProviderRegistry::load().unwrap_or_default();
         if reg.is_empty() {
@@ -1022,7 +1039,14 @@ impl MenuEvents for MissionControl {
             PauseAll => self.not_yet("Pause All (M6)"),
             Settings => {
                 settings::SettingsWindow::new().show();
+                // the settings window may have changed the theme
+                if let Ok(cfg) = maestro_core::config::Config::load() {
+                    theme::apply(&cfg.general.theme);
+                }
             }
+            ThemeDefault => self.switch_theme("default"),
+            ThemeDarkGray => self.switch_theme("dark-gray"),
+            ThemeLight => self.switch_theme("light"),
         }
     }
 }
