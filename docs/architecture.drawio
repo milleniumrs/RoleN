@@ -1,0 +1,159 @@
+<mxfile host="Maestro" agent="hand-authored" type="device">
+  <diagram id="maestro-architecture" name="Architecture">
+    <mxGraphModel dx="1600" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===================== lanes (drawn first so they sit behind) ===================== -->
+        <mxCell id="lane-front" value="front-ends" style="rounded=1;dashed=1;fillColor=none;strokeColor=#9E9E9E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontColor=#616161;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="1180" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-core" value="core services (maestro-core)" style="rounded=1;dashed=1;fillColor=none;strokeColor=#9E9E9E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontColor=#616161;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="1180" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-exec" value="execution" style="rounded=1;dashed=1;fillColor=none;strokeColor=#9E9E9E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontColor=#616161;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="400" width="1180" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-prov" value="providers" style="rounded=1;dashed=1;fillColor=none;strokeColor=#9E9E9E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontColor=#616161;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="590" width="1180" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-store" value="state" style="rounded=1;dashed=1;fillColor=none;strokeColor=#9E9E9E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=12;fontColor=#616161;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1260" y="200" width="290" height="290" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== front-ends ===================== -->
+        <mxCell id="tui" value="&lt;b&gt;maestro-tui&lt;/b&gt; (AppCUI)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;dashboard · providers · rules · projects&lt;br&gt;quick chat · transcripts · settings&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEEEEE;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="90" y="75" width="480" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="&lt;b&gt;maestro-cli&lt;/b&gt; (headless)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;JSON output · NDJSON watch&lt;br&gt;CI-safe exit codes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEEEEE;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="690" y="75" width="480" height="75" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== core ===================== -->
+        <mxCell id="rules" value="&lt;b&gt;Rule engine&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;roles → providers&lt;br&gt;quota-aware fallbacks&lt;br&gt;dry-run explanations&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="90" y="240" width="250" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="orch" value="&lt;b&gt;Orchestrator&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;write queue (per-path FIFO)&lt;br&gt;DAG scheduler · path claims&lt;br&gt;git checkpoints&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0E0E0;strokeColor=#212121;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="380" y="240" width="270" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="ledger" value="&lt;b&gt;Ledger &amp;amp; quota&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;tokens · cost · latency&lt;br&gt;burn alerts&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="690" y="240" width="230" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="projects" value="&lt;b&gt;Projects&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;interrogator · PRD.md/PRD.json&lt;br&gt;AGENTS.md · skills · task DAG&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="960" y="240" width="210" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== execution ===================== -->
+        <mxCell id="runtime" value="&lt;b&gt;Agent runtime&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;tool loop · sandboxed tools&lt;br&gt;context compaction&lt;br&gt;retry + provider migration&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="90" y="440" width="330" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="adapters" value="&lt;b&gt;CLI adapters&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;PTY (ConPTY) · overlay&lt;br&gt;harvest → write tickets&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="470" y="440" width="330" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="clients" value="&lt;b&gt;Provider clients&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;OpenAI · Anthropic · Ollama&lt;br&gt;OAuth refresh · SSH tunnel&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="850" y="440" width="320" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== providers ===================== -->
+        <mxCell id="api" value="&lt;b&gt;API subscriptions&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;kimi · anthropic · OpenAI-compatible&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="90" y="625" width="330" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="ollama" value="&lt;b&gt;Ollama&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;local · cloud · remote over SSH&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="470" y="625" width="330" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="agents" value="&lt;b&gt;CLI agents&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;claude · codex · gemini&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="850" y="625" width="320" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== state ===================== -->
+        <mxCell id="cfg" value="config.toml · rules.yaml&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;providers · subscriptions&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#9E9E9E" vertex="1" parent="1">
+          <mxGeometry x="1285" y="240" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="keys" value="OS keychain&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;age-encrypted vault fallback&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#9E9E9E" vertex="1" parent="1">
+          <mxGeometry x="1285" y="320" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db" value="SQLite&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;ledger · sessions · ticket journal&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#9E9E9E" vertex="1" parent="1">
+          <mxGeometry x="1285" y="400" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== workspace ===================== -->
+        <mxCell id="files" value="&lt;b&gt;Workspace files&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;atomic temp+rename · git checkpoints&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0E0E0;strokeColor=#212121;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="380" y="800" width="330" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="note-writer" value="the orchestrator is the only component that writes files" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontStyle=2;fontColor=#616161" vertex="1" parent="1">
+          <mxGeometry x="740" y="815" width="380" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== edges: front-ends → core ===================== -->
+        <mxCell id="e-tui-rules" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="tui" target="rules">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-tui-orch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="tui" target="orch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-cli-ledger" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="cli" target="ledger">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-cli-projects" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="cli" target="projects">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== edges: core → execution ===================== -->
+        <mxCell id="e-rules-runtime" value="routes role → provider/model" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1;fontSize=11;fontColor=#616161" edge="1" parent="1" source="rules" target="runtime">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-orch-adapters" value="schedules tasks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1;fontSize=11;fontColor=#616161" edge="1" parent="1" source="orch" target="adapters">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-projects-clients" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="projects" target="clients">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== edges: execution → providers ===================== -->
+        <mxCell id="e-runtime-api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="runtime" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-adapters-agents" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="adapters" target="agents">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-clients-ollama" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#757575;endArrow=blockThin;endFill=1" edge="1" parent="1" source="clients" target="ollama">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-runtime-clients" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;dashed=1;endArrow=blockThin;endFill=1;fontSize=11;fontColor=#757575" edge="1" parent="1" source="runtime" target="clients">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== the single-writer path ===================== -->
+        <mxCell id="e-runtime-orch" value="write tickets" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#212121;strokeWidth=3;endArrow=blockThin;endFill=1;fontSize=11;fontStyle=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0" edge="1" parent="1" source="runtime" target="orch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-adapters-orch" value="harvested writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#212121;strokeWidth=3;endArrow=blockThin;endFill=1;fontSize=11;fontStyle=1;exitX=0.75;exitY=0;exitDx=0;exitDy=0" edge="1" parent="1" source="adapters" target="orch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-orch-files" value="applies atomically&#10;(base-hash checked)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#212121;strokeWidth=3;endArrow=blockThin;endFill=1;fontSize=11;fontStyle=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0" edge="1" parent="1" source="orch" target="files">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="295" />
+              <mxPoint x="20" y="835" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===================== edges: state ===================== -->
+        <mxCell id="e-projects-cfg" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BDBDBD;dashed=1;endArrow=none" edge="1" parent="1" source="projects" target="cfg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-clients-keys" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BDBDBD;dashed=1;endArrow=none" edge="1" parent="1" source="clients" target="keys">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-ledger-db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BDBDBD;dashed=1;endArrow=none" edge="1" parent="1" source="ledger" target="db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-orch-db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BDBDBD;dashed=1;endArrow=none" edge="1" parent="1" source="orch" target="db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
