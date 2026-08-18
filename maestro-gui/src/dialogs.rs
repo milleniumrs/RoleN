@@ -4,9 +4,263 @@
 //! confirms, so the app never has to reach into half-typed input.
 
 use eframe::egui;
-use maestro_core::types::QuestionMode;
+use maestro_core::types::{ProviderType, QuestionMode};
 
-use crate::jobs::ConfigForm;
+use crate::jobs::{ConfigForm, ProviderForm};
+
+/// What the Add Provider dialog wants done next.
+pub enum ProviderRequest {
+    Discover(ProviderForm),
+    Save(ProviderForm),
+}
+
+/// `Providers > Add Provider`.
+#[derive(Default)]
+pub struct AddProviderDialog {
+    open: bool,
+    form: ProviderForm,
+    error: Option<String>,
+    note: Option<String>,
+    busy: bool,
+}
+
+impl AddProviderDialog {
+    pub fn open(&mut self) {
+        *self = Self {
+            open: true,
+            ..Default::default()
+        };
+    }
+
+    /// Open pre-filled to edit an existing provider. The key is never shown -
+    /// it lives in the keychain and cannot be read back into the form.
+    pub fn edit(&mut self, form: ProviderForm) {
+        *self = Self {
+            open: true,
+            form,
+            ..Default::default()
+        };
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+    }
+
+    pub fn discovered(&mut self, models: Vec<maestro_core::types::Model>) {
+        self.note = Some(format!(
+            "found {} model(s); they will be saved with the provider",
+            models.len()
+        ));
+        self.form.models = models;
+        self.busy = false;
+    }
+
+    pub fn failed(&mut self, message: String) {
+        self.error = Some(message);
+        self.busy = false;
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context) -> Option<ProviderRequest> {
+        if !self.open {
+            return None;
+        }
+        let mut request = None;
+        let mut close = false;
+
+        let response = egui::Modal::new(egui::Id::new("add-provider-modal")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.heading("Add provider");
+            ui.add_space(8.0);
+
+            egui::Grid::new("add-provider-fields")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Id");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.form.id)
+                            .desired_width(360.0)
+                            .hint_text("unique, e.g. kimi or ollama-local"),
+                    );
+                    ui.end_row();
+
+                    ui.label("Type");
+                    egui::ComboBox::from_id_salt("provider-type")
+                        .selected_text(type_label(self.form.ptype))
+                        .show_ui(ui, |ui| {
+                            for t in [
+                                ProviderType::Api,
+                                ProviderType::Cli,
+                                ProviderType::OllamaLocal,
+                                ProviderType::OllamaCloud,
+                                ProviderType::OllamaRemote,
+                            ] {
+                                if ui
+                                    .selectable_value(&mut self.form.ptype, t, type_label(t))
+                                    .clicked()
+                                {
+                                    // Ollama's bases are known, so offer them
+                                    // instead of making the user recall a URL.
+                                    if self.form.endpoint.trim().is_empty() {
+                                        self.form.endpoint = match t {
+                                            ProviderType::OllamaLocal => {
+                                                maestro_providers::ollama::DEFAULT_LOCAL_BASE.into()
+                                            }
+                                            ProviderType::OllamaCloud => {
+                                                maestro_providers::ollama::DEFAULT_CLOUD_BASE.into()
+                                            }
+                                            _ => String::new(),
+                                        };
+                                    }
+                                }
+                            }
+                        });
+                    ui.end_row();
+
+                    if self.form.ptype == ProviderType::Cli {
+                        ui.label("CLI path");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.cli_path)
+                                .desired_width(360.0)
+                                .hint_text("full path to the agent binary"),
+                        );
+                        ui.end_row();
+                    } else {
+                        ui.label("Endpoint");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.endpoint)
+                                .desired_width(360.0)
+                                .hint_text("https://api.example.com/v1"),
+                        );
+                        ui.end_row();
+
+                        ui.label("API key");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.key)
+                                .desired_width(360.0)
+                                .password(true)
+                                .hint_text("stored in the OS keychain, never in providers.toml"),
+                        );
+                        ui.end_row();
+                    }
+
+                    ui.label("Models");
+                    if self.form.models.is_empty() {
+                        ui.weak("none yet - Discover asks the endpoint");
+                    } else {
+                        ui.label(format!("{} discovered", self.form.models.len()));
+                    }
+                    ui.end_row();
+                });
+
+            if let Some(note) = &self.note {
+                ui.add_space(6.0);
+                ui.weak(note);
+            }
+            if let Some(err) = &self.error {
+                ui.add_space(6.0);
+                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let can_discover = self.form.ptype != ProviderType::Cli && !self.busy;
+                if ui
+                    .add_enabled(can_discover, egui::Button::new("Discover models"))
+                    .on_disabled_hover_text(if self.form.ptype == ProviderType::Cli {
+                        "a CLI agent has no /models endpoint"
+                    } else {
+                        "already working"
+                    })
+                    .clicked()
+                {
+                    match validate_provider(&self.form) {
+                        Some(err) => self.error = Some(err),
+                        None => {
+                            self.error = None;
+                            self.busy = true;
+                            request = Some(ProviderRequest::Discover(self.form.clone()));
+                        }
+                    }
+                }
+
+                if ui
+                    .add_enabled(!self.busy, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    match validate_provider(&self.form) {
+                        Some(err) => self.error = Some(err),
+                        None => {
+                            self.error = None;
+                            self.busy = true;
+                            request = Some(ProviderRequest::Save(self.form.clone()));
+                        }
+                    }
+                }
+
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+                if self.busy {
+                    ui.spinner();
+                }
+            });
+        });
+
+        if close || response.should_close() {
+            self.open = false;
+        }
+        request
+    }
+}
+
+/// Why a provider form cannot be submitted, if it cannot.
+///
+/// The CLI-path rule is stricter than the TUI, which registers `cli` providers
+/// with `cli_path: None` (`maestro-tui/src/add_provider.rs:123`) - and
+/// `run_cli_session` then refuses them, so the entry is dead on arrival.
+pub fn validate_provider(form: &ProviderForm) -> Option<String> {
+    let id = form.id.trim();
+    if id.is_empty() {
+        return Some("id is required".to_string());
+    }
+    if id.split_whitespace().count() > 1 {
+        return Some("id must not contain whitespace".to_string());
+    }
+    match form.ptype {
+        ProviderType::Cli => {
+            if form.cli_path.trim().is_empty() {
+                return Some("a cli provider needs the path to its binary".to_string());
+            }
+        }
+        ProviderType::Api | ProviderType::OllamaRemote => {
+            if form.endpoint.trim().is_empty() {
+                return Some("an endpoint is required for this type".to_string());
+            }
+        }
+        // Local and cloud Ollama fall back to their well-known bases.
+        ProviderType::OllamaLocal | ProviderType::OllamaCloud => {}
+    }
+    None
+}
+
+fn type_label(t: ProviderType) -> &'static str {
+    match t {
+        ProviderType::Api => "api - OpenAI-compatible or Anthropic",
+        ProviderType::Cli => "cli - PTY-wrapped agent",
+        ProviderType::OllamaLocal => "ollama-local",
+        ProviderType::OllamaCloud => "ollama-cloud",
+        ProviderType::OllamaRemote => "ollama-remote - over an SSH tunnel",
+    }
+}
 
 /// `Tools > Settings`.
 ///
@@ -282,5 +536,48 @@ mod tests {
     fn a_critical_of_one_hundred_disables_the_rule() {
         assert!(validate_thresholds(100, 100).is_none());
         assert!(validate_thresholds(80, 100).is_none());
+    }
+
+    fn form(ptype: ProviderType) -> ProviderForm {
+        ProviderForm {
+            id: "test".into(),
+            ptype,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_id_is_required_and_cannot_contain_spaces() {
+        let mut f = form(ProviderType::OllamaLocal);
+        f.id = "  ".into();
+        assert!(validate_provider(&f).is_some());
+        f.id = "two words".into();
+        assert!(validate_provider(&f).is_some());
+        f.id = "ollama-local".into();
+        assert!(validate_provider(&f).is_none());
+    }
+
+    /// api and ollama-remote have nowhere to connect without one; local and
+    /// cloud ollama fall back to their well-known bases.
+    #[test]
+    fn only_some_types_require_an_endpoint() {
+        assert!(validate_provider(&form(ProviderType::Api)).is_some());
+        assert!(validate_provider(&form(ProviderType::OllamaRemote)).is_some());
+        assert!(validate_provider(&form(ProviderType::OllamaLocal)).is_none());
+        assert!(validate_provider(&form(ProviderType::OllamaCloud)).is_none());
+
+        let mut f = form(ProviderType::Api);
+        f.endpoint = "https://api.example.com/v1".into();
+        assert!(validate_provider(&f).is_none());
+    }
+
+    /// The TUI registers cli providers with no path, and run_cli_session then
+    /// refuses to run them. Reject the form instead of saving a dead entry.
+    #[test]
+    fn a_cli_provider_must_have_a_binary_path() {
+        let mut f = form(ProviderType::Cli);
+        assert!(validate_provider(&f).is_some());
+        f.cli_path = "C:/tools/claude.cmd".into();
+        assert!(validate_provider(&f).is_none());
     }
 }

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use crate::dialogs::{NewProjectDialog, SettingsDialog};
+use crate::dialogs::{AddProviderDialog, NewProjectDialog, ProviderRequest, SettingsDialog};
 use crate::jobs::{self, CheckRow, HealthRow, JobMsg, Jobs};
 use crate::menu::{self, Action};
 use crate::state::{Poller, Snapshot};
@@ -64,6 +64,7 @@ pub struct MaestroApp {
     pub selected_project: Option<String>,
     pub new_project: NewProjectDialog,
     pub settings: SettingsDialog,
+    pub add_provider: AddProviderDialog,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
     about_open: bool,
@@ -98,6 +99,7 @@ impl MaestroApp {
             selected_project: None,
             new_project: NewProjectDialog::default(),
             settings: SettingsDialog::default(),
+            add_provider: AddProviderDialog::default(),
             doctor: None,
             about_open: false,
             status: "ready".to_string(),
@@ -161,6 +163,32 @@ impl MaestroApp {
                 JobMsg::ConfigSaved(Err(e)) => {
                     self.set_status(format!("could not save settings: {e}"))
                 }
+                JobMsg::ModelsDiscovered(Ok(models)) => {
+                    self.set_status(format!("discovered {} model(s)", models.len()));
+                    self.add_provider.discovered(models);
+                }
+                JobMsg::ModelsDiscovered(Err(e)) => {
+                    self.set_status(format!("discovery failed: {e}"));
+                    self.add_provider.failed(e);
+                }
+                JobMsg::ProviderSaved(Ok(msg)) => {
+                    self.set_status(msg);
+                    self.add_provider.close();
+                    self.view = View::Providers;
+                    self.poller.refresh_now();
+                }
+                JobMsg::ProviderSaved(Err(e)) => {
+                    self.set_status(format!("could not save the provider: {e}"));
+                    self.add_provider.failed(e);
+                }
+                JobMsg::ProviderRemoved(Ok(msg)) => {
+                    self.set_status(msg);
+                    self.selected_provider = None;
+                    self.poller.refresh_now();
+                }
+                JobMsg::ProviderRemoved(Err(e)) => {
+                    self.set_status(format!("could not remove the provider: {e}"))
+                }
             }
         }
     }
@@ -173,6 +201,10 @@ impl MaestroApp {
                 self.jobs.spawn(jobs::DOCTOR, jobs::doctor);
             }
             Action::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::AddProvider => {
+                self.add_provider.open();
+                self.view = View::Providers;
+            }
             Action::DetectClis => {
                 self.jobs.spawn(jobs::DETECT, jobs::detect_and_register);
                 self.view = View::Providers;
@@ -225,6 +257,18 @@ impl MaestroApp {
         if let Some(form) = self.settings.show(ctx) {
             self.jobs
                 .spawn(jobs::SAVE_CONFIG, move || jobs::save_config(form));
+        }
+
+        match self.add_provider.show(ctx) {
+            Some(ProviderRequest::Discover(form)) => {
+                self.jobs
+                    .spawn(jobs::DISCOVER_MODELS, move || jobs::discover_models(form));
+            }
+            Some(ProviderRequest::Save(form)) => {
+                self.jobs
+                    .spawn(jobs::SAVE_PROVIDER, move || jobs::save_provider(form));
+            }
+            None => {}
         }
 
         let mut close_doctor = false;
@@ -552,6 +596,7 @@ mod tests {
                 warn_pct: 80,
                 crit_pct: 95,
             });
+            app.add_provider.open();
             app.about_open = true;
             app.doctor = Some(vec![
                 CheckRow {
@@ -585,6 +630,7 @@ mod tests {
             Action::NewProject,
             Action::About,
             Action::Settings,
+            Action::AddProvider,
             Action::Theme(egui::ThemePreference::Light),
             Action::Theme(egui::ThemePreference::Dark),
             Action::Exit,
@@ -592,6 +638,34 @@ mod tests {
             app.dispatch(action, &ctx);
             let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
             output.textures_delta.clear();
+        }
+    }
+
+    /// The Add Provider form swaps fields depending on the type - a cli entry
+    /// shows a binary path where an api entry shows endpoint and key.
+    #[test]
+    fn add_provider_renders_for_every_provider_type() {
+        use maestro_core::types::ProviderType;
+        for ptype in [
+            ProviderType::Api,
+            ProviderType::Cli,
+            ProviderType::OllamaLocal,
+            ProviderType::OllamaCloud,
+            ProviderType::OllamaRemote,
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = MaestroApp::headless(ctx.clone());
+            app.view = View::Providers;
+            app.snap = populated();
+            app.add_provider.edit(crate::jobs::ProviderForm {
+                id: "probe".into(),
+                ptype,
+                ..Default::default()
+            });
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
+                output.textures_delta.clear();
+            }
         }
     }
 

@@ -60,6 +60,34 @@ pub struct ConfigForm {
     pub crit_pct: u8,
 }
 
+/// The `Providers > Add Provider` form.
+#[derive(Debug, Clone)]
+pub struct ProviderForm {
+    pub id: String,
+    pub ptype: maestro_core::types::ProviderType,
+    pub endpoint: String,
+    /// Typed in the dialog; stored in the OS keychain (or the age vault) on
+    /// save and never written to `providers.toml`.
+    pub key: String,
+    /// Path to the agent binary for `cli` providers.
+    pub cli_path: String,
+    /// Filled in by a discovery job so saving does not have to fetch again.
+    pub models: Vec<maestro_core::types::Model>,
+}
+
+impl Default for ProviderForm {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            ptype: maestro_core::types::ProviderType::Api,
+            endpoint: String::new(),
+            key: String::new(),
+            cli_path: String::new(),
+            models: Vec::new(),
+        }
+    }
+}
+
 /// A finished job's payload.
 #[derive(Debug)]
 pub enum JobMsg {
@@ -69,6 +97,9 @@ pub enum JobMsg {
     ProjectCreated(Result<String, String>),
     ConfigLoaded(Result<ConfigForm, String>),
     ConfigSaved(Result<(), String>),
+    ModelsDiscovered(Result<Vec<maestro_core::types::Model>, String>),
+    ProviderSaved(Result<String, String>),
+    ProviderRemoved(Result<String, String>),
 }
 
 /// Job names. Static strings so the in-flight set needs no allocation and the
@@ -79,6 +110,9 @@ pub const DOCTOR: &str = "doctor";
 pub const NEW_PROJECT: &str = "new-project";
 pub const LOAD_CONFIG: &str = "load-config";
 pub const SAVE_CONFIG: &str = "save-config";
+pub const DISCOVER_MODELS: &str = "discover-models";
+pub const SAVE_PROVIDER: &str = "save-provider";
+pub const REMOVE_PROVIDER: &str = "remove-provider";
 
 /// Tracks in-flight background work and delivers results to the UI thread.
 pub struct Jobs {
@@ -295,4 +329,105 @@ pub fn save_config(form: ConfigForm) -> JobMsg {
         Ok(()) => JobMsg::ConfigSaved(Ok(())),
         Err(e) => JobMsg::ConfigSaved(Err(e.to_string())),
     }
+}
+
+/// Build the in-memory provider a form describes. No IO.
+fn provider_from(form: &ProviderForm) -> maestro_core::types::Provider {
+    use maestro_core::types::{Provider, ProviderType};
+    let endpoint = form.endpoint.trim();
+    let endpoint = if endpoint.is_empty() {
+        // Ollama has well-known bases, so an empty field is a sensible default
+        // rather than an error.
+        match form.ptype {
+            ProviderType::OllamaLocal => Some(maestro_providers::ollama::DEFAULT_LOCAL_BASE.into()),
+            ProviderType::OllamaCloud => Some(maestro_providers::ollama::DEFAULT_CLOUD_BASE.into()),
+            _ => None,
+        }
+    } else {
+        Some(endpoint.to_string())
+    };
+    Provider {
+        id: form.id.trim().to_string(),
+        ptype: form.ptype,
+        auth: Default::default(),
+        tunnel: None,
+        endpoint,
+        cli_path: if form.cli_path.trim().is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(form.cli_path.trim()))
+        },
+        key_ref: None,
+        models: form.models.clone(),
+    }
+}
+
+/// Ask the endpoint what models it serves, using the key that is still only in
+/// the dialog. One HTTP round trip at a 30 s timeout.
+pub fn discover_models(form: ProviderForm) -> JobMsg {
+    let provider = provider_from(&form);
+    let key = form.key.trim();
+    let key = (!key.is_empty()).then_some(key);
+    match maestro_providers::client::list_models_with_key(&provider, key) {
+        Ok(models) => JobMsg::ModelsDiscovered(Ok(models)),
+        Err(e) => JobMsg::ModelsDiscovered(Err(e.to_string())),
+    }
+}
+
+/// Store the key, then upsert the provider into the registry.
+///
+/// Order matters: if the secret cannot be stored the registry is left alone,
+/// so a provider never ends up recorded with a `key_ref` pointing at nothing.
+pub fn save_provider(form: ProviderForm) -> JobMsg {
+    let mut provider = provider_from(&form);
+    let key = form.key.trim();
+    if !key.is_empty() {
+        let key_ref = maestro_providers::registry::key_ref_for(&provider.id);
+        if let Err(e) = maestro_core::secrets::set_secret(&key_ref, key) {
+            return JobMsg::ProviderSaved(Err(format!("could not store the key: {e}")));
+        }
+        provider.key_ref = Some(key_ref);
+    }
+
+    let mut reg = match maestro_providers::ProviderRegistry::load() {
+        Ok(r) => r,
+        Err(e) => return JobMsg::ProviderSaved(Err(e.to_string())),
+    };
+    // Editing an existing provider must not drop a key that was stored earlier
+    // but not retyped now.
+    if provider.key_ref.is_none() {
+        if let Some(existing) = reg.get(&provider.id) {
+            provider.key_ref = existing.key_ref.clone();
+        }
+    }
+    let id = provider.id.clone();
+    let models = provider.models.len();
+    reg.upsert(provider);
+    match reg.save() {
+        Ok(()) => JobMsg::ProviderSaved(Ok(format!("saved '{id}' with {models} model(s)"))),
+        Err(e) => JobMsg::ProviderSaved(Err(e.to_string())),
+    }
+}
+
+/// Drop a provider from the registry and delete its stored key.
+pub fn remove_provider(id: String) -> JobMsg {
+    let mut reg = match maestro_providers::ProviderRegistry::load() {
+        Ok(r) => r,
+        Err(e) => return JobMsg::ProviderRemoved(Err(e.to_string())),
+    };
+    let key_ref = reg.get(&id).and_then(|p| p.key_ref.clone());
+    if !reg.remove(&id) {
+        return JobMsg::ProviderRemoved(Err(format!("provider '{id}' is not registered")));
+    }
+    if let Err(e) = reg.save() {
+        return JobMsg::ProviderRemoved(Err(e.to_string()));
+    }
+    // Best effort: a leftover secret is untidy but not a failure of the removal.
+    let mut note = String::new();
+    if let Some(kref) = key_ref {
+        if maestro_core::secrets::delete_secret(&kref).is_err() {
+            note = " (stored key could not be deleted)".to_string();
+        }
+    }
+    JobMsg::ProviderRemoved(Ok(format!("removed '{id}'{note}")))
 }
