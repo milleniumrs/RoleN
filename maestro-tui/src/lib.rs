@@ -20,7 +20,7 @@ pub fn run() -> Result<(), appcui::system::Error> {
     let mut app = appcui::system::App::new()
         .app_bar()
         .title("Maestro")
-        .theme(appcui::system::Theme::new(theme::resolve(&theme_name)))
+        .theme(theme::build(&theme_name))
         .build()?;
     app.add_window(mission_control::MissionControl::new());
     app.run();

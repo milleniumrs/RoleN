@@ -122,7 +122,7 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
     conector.notify(CliTaskMsg::Finished(msg));
 }
 
-#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+Doctor+About+Exit)]
+#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+Doctor+About+Exit)]
 pub struct MissionControl {
     // menus (app bar, left side)
     m_file: Handle<MenuButton>,
@@ -267,7 +267,14 @@ impl MissionControl {
                 {'&Theme', items=[
                     {'&Default', cmd:ThemeDefault},
                     {'Dark &Gray', cmd:ThemeDarkGray},
-                    {'&Light', cmd:ThemeLight}
+                    {'&Light', cmd:ThemeLight},
+                    {-},
+                    {'Dar&k (white on black)', cmd:ThemeDark},
+                    {'&Hacker (green phosphor)', cmd:ThemeHacker},
+                    {'&Fancy (pink)', cmd:ThemeFancy},
+                    {'&Rainbow', cmd:ThemeRainbow},
+                    {'&Ocean', cmd:ThemeOcean},
+                    {'&Amber (retro CRT)', cmd:ThemeAmber}
                 ]},
                 {-},
                 {'Config &Doctor', F9, cmd:Doctor}
@@ -1047,6 +1054,12 @@ impl MenuEvents for MissionControl {
             ThemeDefault => self.switch_theme("default"),
             ThemeDarkGray => self.switch_theme("dark-gray"),
             ThemeLight => self.switch_theme("light"),
+            ThemeDark => self.switch_theme("dark"),
+            ThemeHacker => self.switch_theme("hacker"),
+            ThemeFancy => self.switch_theme("fancy"),
+            ThemeRainbow => self.switch_theme("rainbow"),
+            ThemeOcean => self.switch_theme("ocean"),
+            ThemeAmber => self.switch_theme("amber"),
         }
     }
 }
