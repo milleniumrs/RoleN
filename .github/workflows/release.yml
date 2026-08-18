@@ -77,7 +77,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          # on workflow_dispatch GITHUB_REF_NAME is the *branch*, so the
+          # explicit tag input must win; on a tag push there is no input
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           STAGE="${BIN}-${VERSION}-${{ matrix.label }}"
           mkdir -p "dist/${STAGE}"
           if [ "${{ runner.os }}" = "Windows" ]; then

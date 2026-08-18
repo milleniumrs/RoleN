@@ -21,6 +21,10 @@ pub const AVAILABLE: &[(&str, &str)] = &[
     ("rainbow", "a different hue per surface"),
     ("ocean", "cyan and deep blue"),
     ("amber", "retro amber CRT"),
+    ("paper", "white paper, dark ink"),
+    ("sky", "pale cyan, navy ink"),
+    ("mint", "pale green, forest ink"),
+    ("sand", "warm sand, brown ink"),
 ];
 
 /// Colours a custom theme is painted from.
@@ -45,38 +49,51 @@ fn attr(fg: Color, bg: Color) -> CharAttribute {
     CharAttribute::with_color(fg, bg)
 }
 
+/// Foreground-only attribute: the background stays transparent so the text
+/// inherits whatever surface it is drawn on. AppCUI's own themes do this for
+/// every text state; painting an opaque background instead makes each label
+/// carry its own colour patch over the container.
+fn ink(fg: Color) -> CharAttribute {
+    CharAttribute::with_fore_color(fg)
+}
+
 /// Repaint every publicly settable surface of `base` from `p`.
+///
+/// Only genuine *surfaces* get an explicit background (desktop, window bodies
+/// and title bars, selections, tooltips, progress); text-like states are
+/// foreground-only so they blend into the surface beneath them.
 fn paint(base: Themes, p: Palette) -> Theme {
     let mut t = Theme::new(base);
 
     t.desktop.character = Character::with_attributes(' ', attr(p.dim, p.bg));
 
-    t.text.normal = attr(p.win_fg, p.win_bg);
-    t.text.hot_key = attr(p.hot, p.win_bg);
-    t.text.inactive = attr(p.dim, p.win_bg);
-    t.text.error = attr(p.err, p.win_bg);
-    t.text.warning = attr(p.warn, p.win_bg);
-    t.text.hovered = attr(p.hot, p.win_bg);
-    t.text.focused = attr(p.fg, p.win_bg);
-    t.text.highlighted = attr(p.accent, p.win_bg);
-    t.text.enphasized_1 = attr(p.accent, p.win_bg);
-    t.text.enphasized_2 = attr(p.hot, p.win_bg);
-    t.text.enphasized_3 = attr(p.dim, p.win_bg);
+    t.text.normal = ink(p.win_fg);
+    t.text.hot_key = ink(p.hot);
+    t.text.inactive = ink(p.dim);
+    t.text.error = ink(p.err);
+    t.text.warning = ink(p.warn);
+    t.text.hovered = ink(p.hot);
+    t.text.focused = ink(p.fg);
+    t.text.highlighted = ink(p.accent);
+    t.text.enphasized_1 = ink(p.accent);
+    t.text.enphasized_2 = ink(p.hot);
+    t.text.enphasized_3 = ink(p.dim);
 
-    t.symbol.inactive = attr(p.dim, p.win_bg);
+    t.symbol.inactive = ink(p.dim);
     t.symbol.hovered = attr(p.sel_fg, p.sel_bg);
     t.symbol.pressed = attr(p.sel_fg, p.sel_bg);
-    t.symbol.checked = attr(p.accent, p.win_bg);
-    t.symbol.unchecked = attr(p.dim, p.win_bg);
-    t.symbol.unknown = attr(p.warn, p.win_bg);
-    t.symbol.arrows = attr(p.accent, p.win_bg);
-    t.symbol.close = attr(p.err, p.bar_bg);
-    t.symbol.maximized = attr(p.bar_fg, p.bar_bg);
-    t.symbol.resize = attr(p.accent, p.win_bg);
+    t.symbol.checked = ink(p.accent);
+    t.symbol.unchecked = ink(p.dim);
+    t.symbol.unknown = ink(p.warn);
+    t.symbol.arrows = ink(p.accent);
+    t.symbol.close = ink(p.err);
+    t.symbol.maximized = ink(p.bar_fg);
+    t.symbol.resize = ink(p.accent);
 
     t.tooltip.text = attr(p.sel_fg, p.sel_bg);
-    t.tooltip.arrow = attr(p.accent, p.win_bg);
+    t.tooltip.arrow = ink(p.accent);
 
+    // the window body is the surface every control inherits
     t.window.normal = attr(p.win_fg, p.win_bg);
     t.window.inactive = attr(p.dim, p.win_bg);
     t.window.error = attr(p.err, p.win_bg);
@@ -85,39 +102,40 @@ fn paint(base: Themes, p: Palette) -> Theme {
     t.window.bar.focus = attr(p.bar_fg, p.bar_bg);
     t.window.bar.normal = attr(p.dim, p.bar_bg);
     t.window.bar.resizing = attr(p.hot, p.bar_bg);
-    t.window.bar.close_button = attr(p.err, p.bar_bg);
-    t.window.bar.maximize_button = attr(p.bar_fg, p.bar_bg);
-    t.window.bar.tag = attr(p.accent, p.bar_bg);
+    t.window.bar.close_button = ink(p.err);
+    t.window.bar.maximize_button = ink(p.bar_fg);
+    t.window.bar.tag = ink(p.accent);
     t.window.bar.hotkey = attr(p.hot, p.bar_bg);
 
-    t.searchbar.normal = attr(p.dim, p.win_bg);
-    t.searchbar.focused = attr(p.fg, p.sel_bg);
-    t.searchbar.count = attr(p.accent, p.win_bg);
+    t.searchbar.normal = ink(p.dim);
+    t.searchbar.focused = attr(p.sel_fg, p.sel_bg);
+    t.searchbar.count = ink(p.accent);
 
+    // selection is a real surface; unselected rows inherit the container
     t.list_current_item.focus = attr(p.sel_fg, p.sel_bg);
     t.list_current_item.over_inactive = attr(p.dim, p.sel_bg);
     t.list_current_item.over_selection = attr(p.sel_fg, p.sel_bg);
-    t.list_current_item.normal = attr(p.win_fg, p.win_bg);
-    t.list_current_item.selected = attr(p.accent, p.win_bg);
-    t.list_current_item.icon = attr(p.accent, p.win_bg);
+    t.list_current_item.normal = ink(p.win_fg);
+    t.list_current_item.selected = ink(p.accent);
+    t.list_current_item.icon = ink(p.accent);
 
-    t.markdown.text = attr(p.win_fg, p.win_bg);
-    t.markdown.bold = attr(p.accent, p.win_bg);
-    t.markdown.italic = attr(p.hot, p.win_bg);
-    t.markdown.link = attr(p.accent, p.win_bg);
-    t.markdown.code = attr(p.hot, p.win_bg);
-    t.markdown.h1 = attr(p.accent, p.win_bg);
-    t.markdown.h2 = attr(p.hot, p.win_bg);
-    t.markdown.h3 = attr(p.fg, p.win_bg);
-    t.markdown.code_block = attr(p.dim, p.win_bg);
+    t.markdown.text = ink(p.win_fg);
+    t.markdown.bold = ink(p.accent);
+    t.markdown.italic = ink(p.hot);
+    t.markdown.link = ink(p.accent);
+    t.markdown.code = ink(p.hot);
+    t.markdown.h1 = ink(p.accent);
+    t.markdown.h2 = ink(p.hot);
+    t.markdown.h3 = ink(p.fg);
+    t.markdown.code_block = ink(p.dim);
 
     t.progressbar.background = p.dim;
     t.progressbar.progress = p.progress;
     t.progressbar.text = p.win_fg;
 
-    t.hslider.before_line = attr(p.progress, p.win_bg);
-    t.hslider.after_line = attr(p.dim, p.win_bg);
-    t.hslider.cap = attr(p.accent, p.win_bg);
+    t.hslider.before_line = ink(p.progress);
+    t.hslider.after_line = ink(p.dim);
+    t.hslider.cap = ink(p.accent);
 
     t
 }
@@ -209,17 +227,17 @@ fn rainbow() -> Theme {
             progress: Color::Green,
         },
     );
-    t.text.enphasized_1 = attr(Color::Green, Color::Black);
-    t.text.enphasized_2 = attr(Color::Pink, Color::Black);
-    t.text.enphasized_3 = attr(Color::Aqua, Color::Black);
-    t.markdown.h1 = attr(Color::Red, Color::Black);
-    t.markdown.h2 = attr(Color::Olive, Color::Black);
-    t.markdown.h3 = attr(Color::Green, Color::Black);
-    t.markdown.link = attr(Color::Aqua, Color::Black);
-    t.markdown.code = attr(Color::Pink, Color::Black);
-    t.list_current_item.selected = attr(Color::Green, Color::Black);
-    t.list_current_item.icon = attr(Color::Pink, Color::Black);
-    t.window.info = attr(Color::Aqua, Color::Black);
+    t.text.enphasized_1 = ink(Color::Green);
+    t.text.enphasized_2 = ink(Color::Pink);
+    t.text.enphasized_3 = ink(Color::Aqua);
+    t.markdown.h1 = ink(Color::Red);
+    t.markdown.h2 = ink(Color::Olive);
+    t.markdown.h3 = ink(Color::Green);
+    t.markdown.link = ink(Color::Aqua);
+    t.markdown.code = ink(Color::Pink);
+    t.list_current_item.selected = ink(Color::Green);
+    t.list_current_item.icon = ink(Color::Pink);
+    t.window.info = ink(Color::Aqua);
     t.tooltip.text = attr(Color::Black, Color::Aqua);
     t
 }
@@ -268,6 +286,96 @@ fn amber() -> Theme {
     )
 }
 
+// ---- light palettes: dark ink on a light surface ----
+
+fn paper() -> Theme {
+    paint(
+        Themes::Light,
+        Palette {
+            fg: Color::Black,
+            bg: Color::Silver,
+            dim: Color::Gray,
+            hot: Color::DarkRed,
+            accent: Color::DarkBlue,
+            win_fg: Color::Black,
+            win_bg: Color::White,
+            bar_fg: Color::Black,
+            bar_bg: Color::Silver,
+            sel_fg: Color::White,
+            sel_bg: Color::DarkBlue,
+            warn: Color::DarkRed,
+            err: Color::Red,
+            progress: Color::DarkBlue,
+        },
+    )
+}
+
+fn sky() -> Theme {
+    paint(
+        Themes::Light,
+        Palette {
+            fg: Color::DarkBlue,
+            bg: Color::Teal,
+            dim: Color::Blue,
+            hot: Color::DarkRed,
+            accent: Color::DarkBlue,
+            win_fg: Color::Black,
+            win_bg: Color::Aqua,
+            bar_fg: Color::White,
+            bar_bg: Color::DarkBlue,
+            sel_fg: Color::White,
+            sel_bg: Color::DarkBlue,
+            warn: Color::DarkRed,
+            err: Color::Red,
+            progress: Color::DarkBlue,
+        },
+    )
+}
+
+fn mint() -> Theme {
+    paint(
+        Themes::Light,
+        Palette {
+            fg: Color::DarkGreen,
+            bg: Color::DarkGreen,
+            dim: Color::Teal,
+            hot: Color::DarkRed,
+            accent: Color::DarkGreen,
+            win_fg: Color::Black,
+            win_bg: Color::Green,
+            bar_fg: Color::White,
+            bar_bg: Color::DarkGreen,
+            sel_fg: Color::White,
+            sel_bg: Color::DarkGreen,
+            warn: Color::DarkRed,
+            err: Color::Red,
+            progress: Color::DarkGreen,
+        },
+    )
+}
+
+fn sand() -> Theme {
+    paint(
+        Themes::Light,
+        Palette {
+            fg: Color::DarkRed,
+            bg: Color::Olive,
+            dim: Color::Olive,
+            hot: Color::DarkBlue,
+            accent: Color::DarkRed,
+            win_fg: Color::Black,
+            win_bg: Color::Yellow,
+            bar_fg: Color::Black,
+            bar_bg: Color::Olive,
+            sel_fg: Color::Yellow,
+            sel_bg: Color::DarkRed,
+            warn: Color::DarkRed,
+            err: Color::Red,
+            progress: Color::DarkRed,
+        },
+    )
+}
+
 /// Canonical config name for a theme value, accepting aliases (older configs
 /// wrote "dark" when only the three built-ins existed).
 pub fn canonical(name: &str) -> Option<&'static str> {
@@ -281,6 +389,10 @@ pub fn canonical(name: &str) -> Option<&'static str> {
         "rainbow" | "colorful" | "colourful" => Some("rainbow"),
         "ocean" | "blue" | "sea" => Some("ocean"),
         "amber" | "retro" | "crt" => Some("amber"),
+        "paper" | "white" | "ink" => Some("paper"),
+        "sky" | "cyan" | "azure" => Some("sky"),
+        "mint" | "forest" => Some("mint"),
+        "sand" | "desert" | "warm" => Some("sand"),
         _ => None,
     }
 }
@@ -296,6 +408,10 @@ pub fn build(name: &str) -> Theme {
         "rainbow" => rainbow(),
         "ocean" => ocean(),
         "amber" => amber(),
+        "paper" => paper(),
+        "sky" => sky(),
+        "mint" => mint(),
+        "sand" => sand(),
         _ => Theme::new(Themes::Default),
     }
 }
@@ -350,6 +466,66 @@ mod tests {
         assert_eq!(seen.len(), AVAILABLE.len());
     }
 
+    /// Regression guard: text states must never paint their own background,
+    /// otherwise every label shows as a coloured patch over the surface it
+    /// sits on (the window body colour is what defines a theme).
+    #[test]
+    fn text_states_keep_a_transparent_background() {
+        for (name, _) in AVAILABLE {
+            let t = build(name);
+            let transparent = |a: CharAttribute| a.background == Color::Transparent;
+            assert!(
+                transparent(t.text.normal),
+                "{name}: text.normal paints a background"
+            );
+            assert!(
+                transparent(t.text.hot_key),
+                "{name}: text.hot_key paints a background"
+            );
+            assert!(
+                transparent(t.text.inactive),
+                "{name}: text.inactive paints a background"
+            );
+            assert!(
+                transparent(t.markdown.text),
+                "{name}: markdown.text paints a background"
+            );
+            assert!(
+                transparent(t.list_current_item.normal),
+                "{name}: unselected list rows paint a background"
+            );
+        }
+    }
+
+    /// Light themes must genuinely paint a light window surface — verified
+    /// end-to-end by docs/theme_report.py, pinned here so a palette edit
+    /// cannot silently turn a light theme dark.
+    #[test]
+    fn light_themes_have_light_surfaces() {
+        let light_bg = [
+            Color::White,
+            Color::Silver,
+            Color::Aqua,
+            Color::Green,
+            Color::Yellow,
+            Color::Pink,
+        ];
+        for name in ["light", "fancy", "paper", "sky", "mint", "sand"] {
+            let bg = build(name).window.normal.background;
+            assert!(
+                light_bg.contains(&bg),
+                "theme '{name}' claims to be light but paints {bg:?}"
+            );
+        }
+        for name in ["dark", "hacker", "amber", "ocean", "rainbow"] {
+            let bg = build(name).window.normal.background;
+            assert!(
+                !light_bg.contains(&bg),
+                "theme '{name}' claims to be dark but paints {bg:?}"
+            );
+        }
+    }
+
     #[test]
     fn unknown_theme_falls_back_to_default() {
         let fallback = build("nope");
@@ -360,11 +536,12 @@ mod tests {
     #[test]
     fn custom_palettes_are_actually_applied() {
         let h = build("hacker");
+        assert_eq!(h.text.normal, CharAttribute::with_fore_color(Color::Green));
+        assert_eq!(h.progressbar.progress, Color::Green);
         assert_eq!(
-            h.text.normal,
+            h.window.normal,
             CharAttribute::with_color(Color::Green, Color::Black)
         );
-        assert_eq!(h.progressbar.progress, Color::Green);
 
         let f = build("fancy");
         assert_eq!(

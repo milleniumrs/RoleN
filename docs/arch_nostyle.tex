@@ -1,0 +1,12 @@
+% Standalone wrapper: builds docs/architecture.pdf, which docs/build.ps1
+% converts to docs/architecture.png for the README.
+\documentclass[border=6pt]{standalone}
+\usepackage{fontspec}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc,fit,backgrounds,arrows.meta}
+\setmainfont{Georgia}
+\setmonofont{Consolas}
+% style omitted for bisect
+\begin{document}
+\input{tikz/architecture.tex}
+\end{document}

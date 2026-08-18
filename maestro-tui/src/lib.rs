@@ -26,3 +26,25 @@ pub fn run() -> Result<(), appcui::system::Error> {
     app.run();
     Ok(())
 }
+
+/// Render the real Mission Control window offscreen with `theme_name` and
+/// print an ANSI dump of the surface.
+///
+/// This exists so palettes can be verified objectively (which cell has which
+/// background) without a terminal — see `examples/theme_dump.rs`.
+pub fn debug_render(
+    theme_name: &str,
+    width: u16,
+    height: u16,
+) -> Result<(), appcui::system::Error> {
+    let script = "
+        Paint('maestro theme dump')
+    ";
+    let mut app = appcui::system::App::debug(width, height, script)
+        .app_bar()
+        .theme(theme::build(theme_name))
+        .build()?;
+    app.add_window(mission_control::MissionControl::new());
+    app.run();
+    Ok(())
+}
