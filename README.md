@@ -32,7 +32,7 @@ Maestro lets a developer who owns **several LLM subscriptions and CLI tools** tr
 
 ![Maestro architecture](docs/architecture.png)
 
-*Source: docs/tikz/architecture.tex (TikZ) — rebuild with python docs/build.py.*
+*Source: docs/architecture.drawio — edit in [draw.io](https://app.diagrams.net) and re-export as PNG over docs/architecture.png.*
 
 Cargo workspace crates:
 
