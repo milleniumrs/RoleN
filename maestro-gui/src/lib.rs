@@ -17,6 +17,7 @@ pub mod dialogs;
 pub mod jobs;
 pub mod menu;
 pub mod state;
+pub mod text;
 pub mod views;
 
 /// Launch the desktop window. Blocks until it closes.

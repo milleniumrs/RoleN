@@ -2,12 +2,14 @@
 //! poller, the job system and the views.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
 
 use crate::dialogs::{AddProviderDialog, NewProjectDialog, ProviderRequest, SettingsDialog};
-use crate::jobs::{self, CheckRow, HealthRow, JobMsg, Jobs};
+use crate::jobs::{self, CheckRow, DryRun, HealthRow, JobMsg, Jobs};
 use crate::menu::{self, Action};
 use crate::state::{Poller, Snapshot};
 use crate::views;
@@ -65,6 +67,13 @@ pub struct MaestroApp {
     pub new_project: NewProjectDialog,
     pub settings: SettingsDialog,
     pub add_provider: AddProviderDialog,
+    /// Role the dry-run will evaluate.
+    pub dry_run_role: String,
+    pub dry_run_result: Option<DryRun>,
+    pub dry_run_progress: Option<String>,
+    /// Cooperative stop for the routing sweep. Checked between providers - an
+    /// HTTP request already in flight cannot be aborted.
+    dry_run_cancel: Arc<AtomicBool>,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
     about_open: bool,
@@ -100,6 +109,10 @@ impl MaestroApp {
             new_project: NewProjectDialog::default(),
             settings: SettingsDialog::default(),
             add_provider: AddProviderDialog::default(),
+            dry_run_role: "coder".to_string(),
+            dry_run_result: None,
+            dry_run_progress: None,
+            dry_run_cancel: Arc::new(AtomicBool::new(false)),
             doctor: None,
             about_open: false,
             status: "ready".to_string(),
@@ -108,6 +121,24 @@ impl MaestroApp {
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
+    }
+
+    /// Kick off a routing dry-run for the selected role.
+    pub fn start_dry_run(&mut self) {
+        // A fresh flag per run: reusing one that was already set would cancel
+        // the new sweep immediately.
+        self.dry_run_cancel = Arc::new(AtomicBool::new(false));
+        self.dry_run_result = None;
+        self.dry_run_progress = Some("starting...".to_string());
+        let role = self.dry_run_role.clone();
+        let cancel = Arc::clone(&self.dry_run_cancel);
+        self.jobs
+            .spawn_streaming(jobs::DRY_RUN, move |emit| jobs::dry_run(role, cancel, emit));
+    }
+
+    pub fn cancel_dry_run(&mut self) {
+        self.dry_run_cancel.store(true, Ordering::Relaxed);
+        self.dry_run_progress = Some("cancelling after the current provider...".to_string());
     }
 
     fn handle_jobs(&mut self) {
@@ -189,6 +220,32 @@ impl MaestroApp {
                 JobMsg::ProviderRemoved(Err(e)) => {
                     self.set_status(format!("could not remove the provider: {e}"))
                 }
+                JobMsg::DryRunProgress {
+                    done,
+                    total,
+                    provider,
+                } => {
+                    self.dry_run_progress =
+                        Some(format!("checking {provider} ({}/{total})", done + 1));
+                }
+                JobMsg::DryRun(Ok(outcome)) => {
+                    self.dry_run_progress = None;
+                    self.set_status(match &outcome {
+                        DryRun::Decided {
+                            role,
+                            provider,
+                            model,
+                            ..
+                        } => format!("{role} routes to {provider}/{model}"),
+                        DryRun::NoRoute { role, .. } => format!("no route for '{role}'"),
+                        DryRun::Cancelled => "dry-run cancelled".to_string(),
+                    });
+                    self.dry_run_result = Some(outcome);
+                }
+                JobMsg::DryRun(Err(e)) => {
+                    self.dry_run_progress = None;
+                    self.set_status(format!("dry-run failed: {e}"));
+                }
             }
         }
     }
@@ -217,6 +274,10 @@ impl MaestroApp {
                 // Read the file off-thread, then open the dialog when it lands.
                 self.jobs.spawn(jobs::LOAD_CONFIG, jobs::load_config);
             }
+            Action::DryRun => {
+                self.view = View::Rules;
+                self.start_dry_run();
+            }
             Action::Theme(pref) => ctx.set_theme(pref),
             Action::About => self.about_open = true,
         }
@@ -230,6 +291,7 @@ impl MaestroApp {
             KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::N);
         const DOCTOR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F9);
         const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F10);
+        const DRY_RUN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::D);
         const ABOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
 
         ctx.input_mut(|i| {
@@ -239,6 +301,8 @@ impl MaestroApp {
                 Some(Action::Doctor)
             } else if i.consume_shortcut(&SETTINGS) {
                 Some(Action::Settings)
+            } else if i.consume_shortcut(&DRY_RUN) {
+                Some(Action::DryRun)
             } else if i.consume_shortcut(&ABOUT) {
                 Some(Action::About)
             } else {
@@ -394,11 +458,7 @@ impl MaestroApp {
                 View::Dashboard => views::dashboard::show(self, ui),
                 View::Providers => views::providers::show(self, ui),
                 View::Projects => views::projects::show(self, ui),
-                View::Rules => placeholder(
-                    ui,
-                    "Routing rules with a live dry-run. Dry-run calls routing::collect, which \
-                     health-checks every provider serially, so it must be a cancellable job.",
-                ),
+                View::Rules => views::rules::show(self, ui),
                 View::Questions => placeholder(
                     ui,
                     "The interrogation centre: pending clarifications grouped by project, \
@@ -429,7 +489,7 @@ fn placeholder(ui: &mut egui::Ui, what: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ProjectRow, ProviderRow, SessionRow, Tickets, Usage};
+    use crate::state::{ProjectRow, ProviderRow, RuleRow, SessionRow, Tickets, Usage};
     use chrono::Utc;
     use std::path::PathBuf;
 
@@ -506,6 +566,26 @@ mod tests {
                     clarifications: 0,
                     pending: 0,
                     skills: 0,
+                },
+            ],
+            rules: vec![
+                RuleRow {
+                    id: "coder-default".into(),
+                    role: "coder".into(),
+                    priority: 10,
+                    chain: vec!["kimi/k2".into(), "ollama-local/qwen".into()],
+                    conditions: 2,
+                    min_quota_pct: Some(15),
+                    project_scope: Some("my-thing".into()),
+                },
+                RuleRow {
+                    id: "bare".into(),
+                    role: "planner".into(),
+                    priority: 0,
+                    chain: vec![],
+                    conditions: 0,
+                    min_quota_pct: None,
+                    project_scope: None,
                 },
             ],
             workspace_root: Some(PathBuf::from("/ws")),
@@ -667,6 +747,64 @@ mod tests {
                 output.textures_delta.clear();
             }
         }
+    }
+
+    /// Each dry-run outcome renders differently, including the skipped-entry
+    /// list that only appears on a successful decision.
+    #[test]
+    fn every_dry_run_outcome_renders() {
+        let outcomes = [
+            DryRun::Decided {
+                role: "coder".into(),
+                rule_id: "coder-default".into(),
+                provider: "kimi".into(),
+                model: "k2".into(),
+                explanation: "first healthy entry with quota left".into(),
+                skipped: vec![
+                    ("anthropic/claude".into(), "unhealthy".into()),
+                    ("ollama-cloud/glm".into(), "quota below 15%".into()),
+                ],
+            },
+            DryRun::NoRoute {
+                role: "reviewer".into(),
+                reason: "no rule matches and no provider is healthy".into(),
+            },
+            DryRun::Cancelled,
+        ];
+        for outcome in outcomes {
+            let ctx = egui::Context::default();
+            let mut app = MaestroApp::headless(ctx.clone());
+            app.view = View::Rules;
+            app.snap = populated();
+            app.dry_run_result = Some(outcome);
+            app.dry_run_progress = Some("checking kimi (3/8)".into());
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    /// Cancelling must not leave a set flag behind that would abort the next
+    /// sweep before it starts.
+    #[test]
+    fn a_new_dry_run_gets_a_fresh_cancel_flag() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx);
+        app.start_dry_run();
+        app.cancel_dry_run();
+        assert!(app.dry_run_cancel.load(Ordering::Relaxed));
+        let cancelled_flag = Arc::clone(&app.dry_run_cancel);
+
+        app.start_dry_run();
+        assert!(
+            !app.dry_run_cancel.load(Ordering::Relaxed),
+            "the new run must start uncancelled"
+        );
+        assert!(
+            cancelled_flag.load(Ordering::Relaxed),
+            "the old run keeps its own flag so it still stops"
+        );
     }
 
     /// Collection problems are meant to be visible, not swallowed.
