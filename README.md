@@ -44,7 +44,8 @@ Cargo workspace crates:
 | `maestro-orchestrator` | Global write queue, parallel DAG scheduler, git checkpoints, PRD→DAG generation |
 | `maestro-cliadapters` | PTY wrapping of external CLI agents (portable-pty/ConPTY), overlay + harvest |
 | `maestro-tui` | AppCUI front-end: dashboard, providers, rules, projects, questions, quick chat, transcripts, settings |
-| `maestro-cli` | The `maestro` binary: headless commands + TUI launcher |
+| `maestro-gui` | egui/eframe desktop front-end: poller-backed snapshot, worker-thread jobs, dashboard, providers, projects |
+| `maestro-cli` | The `maestro` binary: headless commands + TUI and GUI launchers |
 
 Key design guarantees:
 
@@ -83,6 +84,7 @@ maestro rule init                    # seed routing rules from your providers
 maestro provider test --id kimi --model k3
 
 maestro                              # launch the TUI
+maestro gui                          # launch the desktop window
 
 # headless agent work
 maestro run --role coder --task "Create hello.md" --workdir ./scratch

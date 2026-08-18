@@ -4,6 +4,7 @@ description = "AppCUI-based terminal UI for Maestro (PRD FR-10, docs/TUI-DESIGN.
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 appcui.workspace = true

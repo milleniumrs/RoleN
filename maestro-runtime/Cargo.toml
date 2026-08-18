@@ -4,6 +4,7 @@ description = "Built-in agent loop with ticket-only writes (PRD FR-12)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 maestro-core.workspace = true

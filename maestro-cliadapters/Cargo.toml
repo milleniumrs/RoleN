@@ -4,6 +4,7 @@ description = "PTY wrapping of external CLI agents with overlay+harvest writes (
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 maestro-core.workspace = true
