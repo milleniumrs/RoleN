@@ -4,6 +4,7 @@ description = "Provider registry, HTTP clients and capability/quota probing (Req
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 maestro-core.workspace = true

@@ -28,17 +28,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux
+      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux; eframe
+      # adds winit + glow on top, which need xkbcommon, wayland and GL headers.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libncurses-dev libxcb1-dev libxcb-render0-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev
+            libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev
 
       - name: fmt (Maestro packages only — do not follow path deps)
-        run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-cli -- --check
+        run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-gui -p maestro-cli -- --check
 
       - name: clippy
         run: cargo clippy --workspace -- -D warnings

@@ -153,6 +153,7 @@ jobs:
             maestro config doctor          # verify the environment
             maestro provider detect --register
             maestro                        # launch the TUI
+            maestro gui                    # launch the desktop window
             ```
           files: |
             dist/*.zip

@@ -4,6 +4,7 @@ description = "AppCUI-based terminal UI for Maestro (Requirements FR-10, docs/TU
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 appcui.workspace = true
