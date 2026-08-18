@@ -100,6 +100,32 @@ pub enum JobMsg {
     ModelsDiscovered(Result<Vec<maestro_core::types::Model>, String>),
     ProviderSaved(Result<String, String>),
     ProviderRemoved(Result<String, String>),
+    /// Emitted before each provider is probed during a dry-run sweep.
+    DryRunProgress {
+        done: usize,
+        total: usize,
+        provider: String,
+    },
+    DryRun(Result<DryRun, String>),
+}
+
+/// What a rule dry-run concluded.
+#[derive(Debug, Clone)]
+pub enum DryRun {
+    Decided {
+        role: String,
+        rule_id: String,
+        provider: String,
+        model: String,
+        explanation: String,
+        /// Chain entries that were passed over, with the reason.
+        skipped: Vec<(String, String)>,
+    },
+    NoRoute {
+        role: String,
+        reason: String,
+    },
+    Cancelled,
 }
 
 /// Job names. Static strings so the in-flight set needs no allocation and the
@@ -110,15 +136,34 @@ pub const DOCTOR: &str = "doctor";
 pub const NEW_PROJECT: &str = "new-project";
 pub const LOAD_CONFIG: &str = "load-config";
 pub const SAVE_CONFIG: &str = "save-config";
+pub const DRY_RUN: &str = "dry-run";
 pub const DISCOVER_MODELS: &str = "discover-models";
 pub const SAVE_PROVIDER: &str = "save-provider";
 pub const REMOVE_PROVIDER: &str = "remove-provider";
 
 /// Tracks in-flight background work and delivers results to the UI thread.
+/// Lets a long job report progress before it finishes.
+///
+/// Needed because the only progress the core can offer for a routing sweep is
+/// "which provider am I on", and that is worth showing when the worst case is
+/// 30 s per provider.
+pub struct Emitter {
+    name: &'static str,
+    tx: Sender<(&'static str, JobMsg, bool)>,
+    ctx: egui::Context,
+}
+
+impl Emitter {
+    pub fn progress(&self, msg: JobMsg) {
+        let _ = self.tx.send((self.name, msg, false));
+        self.ctx.request_repaint();
+    }
+}
+
 pub struct Jobs {
     ctx: egui::Context,
-    tx: Sender<(&'static str, JobMsg)>,
-    rx: Receiver<(&'static str, JobMsg)>,
+    tx: Sender<(&'static str, JobMsg, bool)>,
+    rx: Receiver<(&'static str, JobMsg, bool)>,
     running: BTreeSet<&'static str>,
 }
 
@@ -149,6 +194,15 @@ impl Jobs {
     where
         F: FnOnce() -> JobMsg + Send + 'static,
     {
+        self.spawn_streaming(name, move |_| work())
+    }
+
+    /// Like [`Jobs::spawn`], but the closure may emit progress messages before
+    /// returning its result.
+    pub fn spawn_streaming<F>(&mut self, name: &'static str, work: F) -> bool
+    where
+        F: FnOnce(&Emitter) -> JobMsg + Send + 'static,
+    {
         if !self.running.insert(name) {
             return false;
         }
@@ -157,10 +211,15 @@ impl Jobs {
         let spawned = std::thread::Builder::new()
             .name(format!("maestro-gui:{name}"))
             .spawn(move || {
-                let msg = work();
+                let emitter = Emitter {
+                    name,
+                    tx: tx.clone(),
+                    ctx: ctx.clone(),
+                };
+                let msg = work(&emitter);
                 // If the receiver is gone the window is closing; dropping the
                 // result is the correct behaviour.
-                let _ = tx.send((name, msg));
+                let _ = tx.send((name, msg, true));
                 // Wake the UI thread: egui is not repainting continuously when
                 // idle, so without this the result would sit unnoticed.
                 ctx.request_repaint();
@@ -172,11 +231,14 @@ impl Jobs {
         true
     }
 
-    /// Collect everything that finished since the last frame.
+    /// Collect everything delivered since the last frame. A job stays in the
+    /// running set until it sends its final message.
     pub fn drain(&mut self) -> Vec<JobMsg> {
         let mut out = Vec::new();
-        while let Ok((name, msg)) = self.rx.try_recv() {
-            self.running.remove(name);
+        while let Ok((name, msg, finished)) = self.rx.try_recv() {
+            if finished {
+                self.running.remove(name);
+            }
             out.push(msg);
         }
         out
@@ -406,6 +468,59 @@ pub fn save_provider(form: ProviderForm) -> JobMsg {
     match reg.save() {
         Ok(()) => JobMsg::ProviderSaved(Ok(format!("saved '{id}' with {models} model(s)"))),
         Err(e) => JobMsg::ProviderSaved(Err(e.to_string())),
+    }
+}
+
+/// Evaluate the routing rules for `role` against live provider state.
+///
+/// The expensive part is the routing sweep, not the decision: `decide` is pure
+/// and instant, while collecting the context health-checks every provider. So
+/// the cancel flag is threaded into the sweep and the role is only resolved
+/// once real state is in hand.
+pub fn dry_run(
+    role: String,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    emit: &Emitter,
+) -> JobMsg {
+    use std::sync::atomic::Ordering;
+
+    let rules = match maestro_core::rules::RuleSet::load() {
+        Ok(r) => r,
+        Err(e) => return JobMsg::DryRun(Err(format!("could not read rules.yaml: {e}"))),
+    };
+
+    let is_cancelled = || cancel.load(Ordering::Relaxed);
+    let mut on_provider = |done: usize, total: usize, provider: &str| {
+        emit.progress(JobMsg::DryRunProgress {
+            done,
+            total,
+            provider: provider.to_string(),
+        });
+    };
+
+    let ctx = match maestro_providers::routing::collect_cancellable(
+        None,
+        None,
+        &is_cancelled,
+        &mut on_provider,
+    ) {
+        Ok(Some(ctx)) => ctx,
+        Ok(None) => return JobMsg::DryRun(Ok(DryRun::Cancelled)),
+        Err(e) => return JobMsg::DryRun(Err(e.to_string())),
+    };
+
+    match maestro_core::rules::decide(&rules, &role, &ctx) {
+        Ok(d) => JobMsg::DryRun(Ok(DryRun::Decided {
+            role,
+            rule_id: d.rule_id,
+            provider: d.provider,
+            model: d.model,
+            explanation: d.explanation,
+            skipped: d.skipped,
+        })),
+        Err(maestro_core::rules::RuleError::NoRoute { role, reason }) => {
+            JobMsg::DryRun(Ok(DryRun::NoRoute { role, reason }))
+        }
     }
 }
 

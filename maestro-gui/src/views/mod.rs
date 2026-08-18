@@ -5,6 +5,7 @@
 pub mod dashboard;
 pub mod projects;
 pub mod providers;
+pub mod rules;
 
 /// Compact token counts: 45 / 12.3k / 1.5M.
 pub fn fmt_tokens(n: u64) -> String {

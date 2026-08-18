@@ -41,10 +41,34 @@ pub fn remaining_pct(provider_id: &str) -> Option<u8> {
 /// Collect the full evaluation context: every registered provider with
 /// health, quota, cycle cost and models. CLI providers are listed but always
 /// "unhealthy" for HTTP routing until the M5 adapters land.
+///
+/// This health-checks providers one at a time at a 30 s timeout each, so with
+/// several unreachable endpoints it can block for minutes. Callers with a user
+/// waiting should use [`collect_cancellable`].
 pub fn collect(
     task_type: Option<String>,
     project: Option<String>,
 ) -> Result<EvalContext, ProviderError> {
+    // Never cancelled, so the option is always Some.
+    let ctx = collect_cancellable(task_type, project, &|| false, &mut |_, _, _| {})?;
+    Ok(ctx.expect("collect_cancellable only yields None when cancelled"))
+}
+
+/// [`collect`] with a way out.
+///
+/// `cancelled` is polled before each provider is contacted and once at the
+/// end; `Ok(None)` means the caller asked to stop. `on_provider` is called
+/// with `(done_so_far, total, provider_id)` before each health check, which is
+/// the only progress a caller can get - a single `client::health` call cannot
+/// be interrupted once it is in flight, so the worst case after cancelling is
+/// the remaining timeout of the provider already being probed, not the sum of
+/// all of them.
+pub fn collect_cancellable(
+    task_type: Option<String>,
+    project: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+    on_provider: &mut dyn FnMut(usize, usize, &str),
+) -> Result<Option<EvalContext>, ProviderError> {
     let reg = ProviderRegistry::load()?;
     let ledger = Ledger::open_default().ok();
     let month_start = {
@@ -59,7 +83,12 @@ pub fn collect(
     };
 
     let mut providers = std::collections::HashMap::new();
-    for p in reg.list() {
+    let total = reg.list().len();
+    for (done, p) in reg.list().iter().enumerate() {
+        if cancelled() {
+            return Ok(None);
+        }
+        on_provider(done, total, &p.id);
         let (healthy, models) = if p.ptype == ProviderType::Cli {
             (false, Vec::new())
         } else {
@@ -83,10 +112,41 @@ pub fn collect(
         );
     }
 
-    Ok(EvalContext {
+    if cancelled() {
+        return Ok(None);
+    }
+    Ok(Some(EvalContext {
         task_type,
         project,
         now: Some(chrono::Utc::now()),
         providers,
-    })
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Cancelling before the first provider must contact nobody. This is what
+    /// makes the GUI's Cancel button worth having: without the early check the
+    /// caller would still wait out every remaining 30 s timeout.
+    #[test]
+    fn cancelling_up_front_contacts_no_provider() {
+        let seen = AtomicUsize::new(0);
+        let mut on_provider = |_: usize, _: usize, _: &str| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        };
+        let out = collect_cancellable(None, None, &|| true, &mut on_provider)
+            .expect("registry load should succeed");
+        assert!(
+            out.is_none(),
+            "cancelled collection must not return a context"
+        );
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            0,
+            "no provider should have been probed"
+        );
+    }
 }

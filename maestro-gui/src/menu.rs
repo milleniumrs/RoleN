@@ -22,6 +22,8 @@ pub enum Action {
     AddProvider,
     DetectClis,
     HealthCheck,
+    // Rules
+    DryRun,
     // Tools
     Settings,
     Theme(egui::ThemePreference),
@@ -92,13 +94,9 @@ pub fn show(ui: &mut egui::Ui) -> Option<Action> {
                 "Rule editing is CLI-only so far.\n\
                  For now: maestro rule add / maestro rule init",
             );
-            unimplemented_item(
-                ui,
-                "Dry-Run",
-                "Calls routing::collect, which health-checks every provider serially \
-                 (30 s timeout each), so it needs a cancellable job first.\n\
-                 For now: maestro rule dry-run --role <role>",
-            );
+            if item(ui, "Dry-Run", "Ctrl+D") {
+                action = Some(Action::DryRun);
+            }
         });
 
         MenuButton::new("Sessions").ui(ui, |ui| {

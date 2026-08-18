@@ -79,6 +79,18 @@ pub struct ProjectRow {
     pub skills: usize,
 }
 
+/// A routing rule as the table shows it.
+#[derive(Debug, Clone)]
+pub struct RuleRow {
+    pub id: String,
+    pub role: String,
+    pub priority: i32,
+    pub chain: Vec<String>,
+    pub conditions: usize,
+    pub min_quota_pct: Option<u8>,
+    pub project_scope: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: String,
@@ -97,6 +109,7 @@ pub struct Snapshot {
     pub generated: Option<DateTime<Utc>>,
     pub providers: Vec<ProviderRow>,
     pub projects: Vec<ProjectRow>,
+    pub rules: Vec<RuleRow>,
     pub workspace_root: Option<PathBuf>,
     pub sessions: Vec<SessionRow>,
     pub today: Usage,
@@ -198,6 +211,7 @@ fn worker(
     let mut ledger: Option<Ledger> = None;
     let mut quota: HashMap<String, Option<u8>> = HashMap::new();
     let mut projects: Vec<ProjectRow> = Vec::new();
+    let mut rules: Vec<RuleRow> = Vec::new();
     let mut workspace_root: Option<PathBuf> = None;
     let mut cycle: u64 = 0;
     // The first pass must populate the slow data, and an explicit refresh
@@ -241,10 +255,29 @@ fn worker(
                 .unwrap_or_default();
             projects = scan_projects(&root);
             workspace_root = Some(root);
+            // `RuleSet::load` yields an empty default when rules.yaml is
+            // absent, so a missing file is not a problem worth reporting.
+            rules = maestro_core::rules::RuleSet::load()
+                .map(|set| {
+                    set.rules
+                        .into_iter()
+                        .map(|r| RuleRow {
+                            id: r.id,
+                            role: r.role,
+                            priority: r.priority,
+                            chain: r.fallback_chain,
+                            conditions: r.conditions.len(),
+                            min_quota_pct: r.min_quota_pct,
+                            project_scope: r.project_scope,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
         }
 
         let mut snapshot = collect(registry.as_ref(), &mut ledger, &quota, problems);
         snapshot.projects = projects.clone();
+        snapshot.rules = rules.clone();
         snapshot.workspace_root = workspace_root.clone();
         if tx.send(snapshot).is_err() {
             return; // UI is gone
