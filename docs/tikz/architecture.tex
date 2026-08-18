@@ -15,31 +15,31 @@
   flow/.style       = {-{Latex[length=4pt]}, draw=black!55, line width=0.6pt},
   ticket/.style     = {-{Latex[length=5pt]}, draw=black!80, line width=1.4pt},
   side/.style       = {-{Latex[length=3pt]}, draw=black!35, line width=0.4pt, dashed},
-  cap/.style        = {font=\scriptsize\itshape, text=black!60},
+  edgelbl/.style        = {font=\scriptsize\itshape, text=black!60},
 ]
 
 % ---------------- front-ends ----------------
-\node[front] (tui) at (3.4,10.4) {\textbf{maestro-tui} (AppCUI)\\[-1pt]{\scriptsize dashboard · providers · rules · projects · chat}};
-\node[front] (cli) at (11.0,10.4) {\textbf{maestro-cli} (headless)\\[-1pt]{\scriptsize JSON output · NDJSON watch · CI exit codes}};
+\node[front] (tui) at (3.4,10.4) {\textbf{maestro-tui} (AppCUI)\\[-1pt]\scriptsize dashboard · providers · rules · projects · chat};
+\node[front] (cli) at (11.0,10.4) {\textbf{maestro-cli} (headless)\\[-1pt]\scriptsize JSON output · NDJSON watch · CI exit codes};
 
 % ---------------- core ----------------
-\node[core] (rules)  at (1.85,7.9) {\textbf{Rule engine}\\[-1pt]{\scriptsize roles $\rightarrow$ providers\\quota-aware fallbacks\\dry-run}};
-\node[core] (orch)   at (5.75,7.9) {\textbf{Orchestrator}\\[-1pt]{\scriptsize write queue\\DAG scheduler\\git checkpoints}};
-\node[core] (ledger) at (9.65,7.9) {\textbf{Ledger \& quota}\\[-1pt]{\scriptsize tokens · cost\\burn alerts}};
-\node[core] (proj)   at (13.55,7.9) {\textbf{Projects}\\[-1pt]{\scriptsize interrogator\\PRD · AGENTS.md\\skills · task DAG}};
+\node[core] (rules)  at (1.85,7.9) {\textbf{Rule engine}\\[-1pt]\scriptsize roles $\rightarrow$ providers\\quota-aware fallbacks\\dry-run};
+\node[core] (orch)   at (5.75,7.9) {\textbf{Orchestrator}\\[-1pt]\scriptsize write queue\\DAG scheduler\\git checkpoints};
+\node[core] (ledger) at (9.65,7.9) {\textbf{Ledger \& quota}\\[-1pt]\scriptsize tokens · cost\\burn alerts};
+\node[core] (proj)   at (13.55,7.9) {\textbf{Projects}\\[-1pt]\scriptsize interrogator\\PRD · AGENTS.md\\skills · task DAG};
 
 % ---------------- execution ----------------
-\node[exec] (runtime) at (2.6,5.0) {\textbf{Agent runtime}\\[-1pt]{\scriptsize tool loop · sandboxed tools\\retry + migration}};
-\node[exec] (adapters) at (7.7,5.0) {\textbf{CLI adapters}\\[-1pt]{\scriptsize PTY (ConPTY) · overlay\\harvest $\rightarrow$ tickets}};
-\node[exec] (clients) at (12.8,5.0) {\textbf{Provider clients}\\[-1pt]{\scriptsize OpenAI · Anthropic · Ollama\\OAuth refresh · SSH tunnel}};
+\node[exec] (runtime) at (2.6,5.0) {\textbf{Agent runtime}\\[-1pt]\scriptsize tool loop · sandboxed tools\\retry + migration};
+\node[exec] (adapters) at (7.7,5.0) {\textbf{CLI adapters}\\[-1pt]\scriptsize PTY (ConPTY) · overlay\\harvest $\rightarrow$ tickets};
+\node[exec] (clients) at (12.8,5.0) {\textbf{Provider clients}\\[-1pt]\scriptsize OpenAI · Anthropic · Ollama\\OAuth refresh · SSH tunnel};
 
 % ---------------- providers ----------------
-\node[prov] (api)    at (2.6,2.5) {API subscriptions\\[-1pt]{\scriptsize kimi · anthropic · OpenAI-compatible}};
-\node[prov] (ollama) at (7.7,2.5) {Ollama\\[-1pt]{\scriptsize local · cloud · remote over SSH}};
-\node[prov] (agents) at (12.8,2.5) {CLI agents\\[-1pt]{\scriptsize claude · codex · gemini}};
+\node[prov] (api)    at (2.6,2.5) {API subscriptions\\[-1pt]\scriptsize kimi · anthropic · OpenAI-compatible};
+\node[prov] (ollama) at (7.7,2.5) {Ollama\\[-1pt]\scriptsize local · cloud · remote over SSH};
+\node[prov] (agents) at (12.8,2.5) {CLI agents\\[-1pt]\scriptsize claude · codex · gemini};
 
 % ---------------- the single-writer path ----------------
-\node[files] (files) at (5.75,0.35) {\textbf{Workspace files}\\[-1pt]{\scriptsize atomic writes · git checkpoints}};
+\node[files] (files) at (5.75,0.35) {\textbf{Workspace files}\\[-1pt]\scriptsize atomic writes · git checkpoints};
 
 % ---------------- stores ----------------
 \node[store] (cfg)   at (16.9,9.2) {config.toml\\rules.yaml};
@@ -64,23 +64,27 @@
 \draw[flow] (cli.south)  -- ++(0,-0.55) -| (ledger.north);
 \draw[flow] (cli.south)  -- ++(0,-0.55) -| (proj.north);
 
-\draw[flow] (rules.south) -- ++(0,-0.6) -| node[cap, pos=0.25, above] {routes} (runtime.north);
-\draw[flow] (orch.south)  -- ++(0,-0.6) -| node[cap, pos=0.25, above] {schedules} (adapters.north);
+\draw[flow] (rules.south) -- ++(0,-0.6) -| node[edgelbl, pos=0.25, above] {routes} (runtime.north);
+\draw[flow] (orch.south)  -- ++(0,-0.6) -| node[edgelbl, pos=0.25, above] {schedules} (adapters.north);
 \draw[flow] (proj.south)  -- ++(0,-0.6) -| (clients.north);
 
-\draw[flow] (runtime.south)  -- node[cap, right] {} (api.north);
+\draw[flow] (runtime.south)  -- node[edgelbl, right] {} (api.north);
 \draw[flow] (adapters.south) -- (ollama.north);
 \draw[flow] (clients.south)  -- (agents.north);
 \draw[flow] (clients.west)   -- (adapters.east);
 \draw[flow] (runtime.east)   -- (adapters.west);
 
-% write tickets: the only path to the filesystem
-\draw[ticket] (runtime.south west) .. controls (1.2,2.6) and (1.6,0.9) .. (files.west)
-  node[cap, pos=0.55, left, align=right] {write\\tickets};
-\draw[ticket] (adapters.south east) .. controls (12.0,2.6) and (10.5,0.6) .. (files.east)
-  node[cap, pos=0.5, right, align=left] {harvested\\writes};
-\draw[ticket] (orch.east) .. controls (16.2,7.0) and (15.0,0.2) .. (files.south east);
-\node[cap, anchor=west] at (9.9,0.35) {orchestrator is the only writer};
+% write tickets: agents never touch the filesystem; they submit tickets to
+% the orchestrator, which is the only component that writes
+\draw[ticket] (runtime.west) .. controls (0.2,5.6) and (0.2,7.4) .. (rules.west)
+  node[edgelbl, pos=0.5, left, align=right] {};
+\draw[ticket] (runtime.north east) .. controls (5.0,6.2) and (5.2,6.8) .. (orch.south west)
+  node[edgelbl, pos=0.45, above left, align=center] {write\\tickets};
+\draw[ticket] (adapters.north) .. controls (7.7,6.4) and (6.6,6.8) .. (orch.south east)
+  node[edgelbl, pos=0.55, right, align=left] {harvested\\writes};
+\draw[ticket] (orch.west) .. controls (-1.1,7.9) and (-1.1,1.0) .. (files.west)
+  node[edgelbl, pos=0.55, left, align=right] {applies\\atomically};
+\node[edgelbl, anchor=west] at (8.1,0.35) {the orchestrator is the only writer};
 
 % stores
 \draw[side] (cfg.west)  -- (proj.east);

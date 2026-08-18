@@ -30,24 +30,9 @@ Maestro lets a developer who owns **several LLM subscriptions and CLI tools** tr
 
 ## Architecture
 
-```
-┌──────────────────────────── Maestro ────────────────────────────┐
-│  maestro-tui (AppCUI)          maestro-cli (headless, CI-safe)  │
-│        └───────────┬────────────────┘                           │
-│                    ▼                                            │
-│  ┌─────────────┬───────────────┬───────────────┬─────────────┐  │
-│  │ Rule engine │ Orchestrator  │ Quota/Ledger  │ Interrogator│  │
-│  │  (YAML)     │ (write queue  │  (SQLite)     │ (clarify)   │  │
-│  │             │  + scheduler) │               │             │  │
-│  └─────────────┴──────┬────────┴───────────────┴─────────────┘  │
-│                       ▼                                         │
-│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
-│  │ Agent runtime│  │ CLI adapters(PTY)│  │ Provider HTTP API │  │
-│  │ (tool loop)  │  │ overlay+harvest  │  │ clients           │  │
-│  └──────────────┘  └──────────────────┘  └───────────────────┘  │
-│        └──────────► write tickets ──► ORCHESTRATOR (sole writer)│
-└─────────────────────────────────────────────────────────────────┘
-```
+![Maestro architecture](docs/architecture.png)
+
+*Source: docs/tikz/architecture.tex (TikZ) — rebuild with python docs/build.py.*
 
 Cargo workspace crates:
 
