@@ -22,6 +22,7 @@ pub enum Action {
     DetectClis,
     HealthCheck,
     // Tools
+    Settings,
     Theme(egui::ThemePreference),
     // Help
     About,
@@ -118,12 +119,9 @@ pub fn show(ui: &mut egui::Ui) -> Option<Action> {
         });
 
         MenuButton::new("Tools").ui(ui, |ui| {
-            unimplemented_item(
-                ui,
-                "Settings",
-                "Workspace root, question mode, parallelism and quota thresholds.\n\
-                 For now: maestro config show",
-            );
+            if item(ui, "Settings", "F10") {
+                action = Some(Action::Settings);
+            }
             SubMenuButton::new("Theme").ui(ui, |ui| {
                 for (label, pref) in [
                     ("Dark", egui::ThemePreference::Dark),

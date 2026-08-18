@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use crate::dialogs::NewProjectDialog;
+use crate::dialogs::{NewProjectDialog, SettingsDialog};
 use crate::jobs::{self, CheckRow, HealthRow, JobMsg, Jobs};
 use crate::menu::{self, Action};
 use crate::state::{Poller, Snapshot};
@@ -63,6 +63,7 @@ pub struct MaestroApp {
     pub selected_provider: Option<String>,
     pub selected_project: Option<String>,
     pub new_project: NewProjectDialog,
+    pub settings: SettingsDialog,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
     about_open: bool,
@@ -96,6 +97,7 @@ impl MaestroApp {
             selected_provider: None,
             selected_project: None,
             new_project: NewProjectDialog::default(),
+            settings: SettingsDialog::default(),
             doctor: None,
             about_open: false,
             status: "ready".to_string(),
@@ -147,6 +149,18 @@ impl MaestroApp {
                 JobMsg::ProjectCreated(Err(e)) => {
                     self.set_status(format!("could not create the project: {e}"))
                 }
+                JobMsg::ConfigLoaded(Ok(form)) => self.settings.populate(form),
+                JobMsg::ConfigLoaded(Err(e)) => {
+                    self.set_status(format!("could not read config.toml: {e}"))
+                }
+                JobMsg::ConfigSaved(Ok(())) => {
+                    self.set_status("settings saved");
+                    // workspace_root may have moved, so the project scan is stale.
+                    self.poller.refresh_now();
+                }
+                JobMsg::ConfigSaved(Err(e)) => {
+                    self.set_status(format!("could not save settings: {e}"))
+                }
             }
         }
     }
@@ -167,6 +181,10 @@ impl MaestroApp {
                 self.jobs.spawn(jobs::HEALTH_CHECK, jobs::health_check_all);
                 self.view = View::Providers;
             }
+            Action::Settings => {
+                // Read the file off-thread, then open the dialog when it lands.
+                self.jobs.spawn(jobs::LOAD_CONFIG, jobs::load_config);
+            }
             Action::Theme(pref) => ctx.set_theme(pref),
             Action::About => self.about_open = true,
         }
@@ -179,6 +197,7 @@ impl MaestroApp {
         const NEW_ALT: KeyboardShortcut =
             KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::N);
         const DOCTOR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F9);
+        const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F10);
         const ABOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
 
         ctx.input_mut(|i| {
@@ -186,6 +205,8 @@ impl MaestroApp {
                 Some(Action::NewProject)
             } else if i.consume_shortcut(&DOCTOR) {
                 Some(Action::Doctor)
+            } else if i.consume_shortcut(&SETTINGS) {
+                Some(Action::Settings)
             } else if i.consume_shortcut(&ABOUT) {
                 Some(Action::About)
             } else {
@@ -199,6 +220,11 @@ impl MaestroApp {
             self.jobs.spawn(jobs::NEW_PROJECT, move || {
                 jobs::scaffold_project(draft.name, draft.description, draft.stack)
             });
+        }
+
+        if let Some(form) = self.settings.show(ctx) {
+            self.jobs
+                .spawn(jobs::SAVE_CONFIG, move || jobs::save_config(form));
         }
 
         let mut close_doctor = false;
@@ -518,6 +544,14 @@ mod tests {
             app.view = view;
             app.snap = populated();
             app.new_project.open();
+            app.settings.populate(crate::jobs::ConfigForm {
+                workspace_root: "/ws".into(),
+                question_mode: maestro_core::types::QuestionMode::Balanced,
+                global_cap: 0,
+                per_provider_cap: 2,
+                warn_pct: 80,
+                crit_pct: 95,
+            });
             app.about_open = true;
             app.doctor = Some(vec![
                 CheckRow {
@@ -550,6 +584,7 @@ mod tests {
         for action in [
             Action::NewProject,
             Action::About,
+            Action::Settings,
             Action::Theme(egui::ThemePreference::Light),
             Action::Theme(egui::ThemePreference::Dark),
             Action::Exit,
