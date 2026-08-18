@@ -43,6 +43,23 @@ pub struct CheckRow {
     pub detail: String,
 }
 
+/// The editable slice of `config.toml`.
+///
+/// Deliberately not the whole `Config`: `general.theme` belongs to the TUI and
+/// `quotas.action` has no UI yet, so both are read back from disk at save time
+/// and preserved. The TUI overwrites `quotas.action` with `Notify` on every
+/// save (`maestro-tui/src/settings.rs:175`), silently discarding a
+/// `switch-rule` or `pause-role` setting; this does not.
+#[derive(Debug, Clone)]
+pub struct ConfigForm {
+    pub workspace_root: String,
+    pub question_mode: maestro_core::types::QuestionMode,
+    pub global_cap: usize,
+    pub per_provider_cap: usize,
+    pub warn_pct: u8,
+    pub crit_pct: u8,
+}
+
 /// A finished job's payload.
 #[derive(Debug)]
 pub enum JobMsg {
@@ -50,6 +67,8 @@ pub enum JobMsg {
     Detected(Result<DetectReport, String>),
     Doctor(Vec<CheckRow>),
     ProjectCreated(Result<String, String>),
+    ConfigLoaded(Result<ConfigForm, String>),
+    ConfigSaved(Result<(), String>),
 }
 
 /// Job names. Static strings so the in-flight set needs no allocation and the
@@ -58,6 +77,8 @@ pub const HEALTH_CHECK: &str = "health-check";
 pub const DETECT: &str = "detect";
 pub const DOCTOR: &str = "doctor";
 pub const NEW_PROJECT: &str = "new-project";
+pub const LOAD_CONFIG: &str = "load-config";
+pub const SAVE_CONFIG: &str = "save-config";
 
 /// Tracks in-flight background work and delivers results to the UI thread.
 pub struct Jobs {
@@ -234,5 +255,44 @@ pub fn scaffold_project(name: String, description: String, stack: String) -> Job
             JobMsg::ProjectCreated(Ok(format!("created '{}' at {}", meta.id, dir.display())))
         }
         Err(e) => JobMsg::ProjectCreated(Err(e.to_string())),
+    }
+}
+
+/// Read `config.toml` for the settings form.
+///
+/// `Config::load` returns an error when the file does not exist rather than a
+/// default, so `ensure` is used: a fresh install gets a real file written and
+/// the form shows what is actually on disk.
+pub fn load_config() -> JobMsg {
+    match maestro_core::config::Config::ensure() {
+        Ok((c, _created)) => JobMsg::ConfigLoaded(Ok(ConfigForm {
+            workspace_root: c.general.workspace_root.display().to_string(),
+            question_mode: c.general.question_mode,
+            global_cap: c.parallelism.global_cap,
+            per_provider_cap: c.parallelism.per_provider_cap,
+            warn_pct: c.quotas.warn_pct,
+            crit_pct: c.quotas.crit_pct,
+        })),
+        Err(e) => JobMsg::ConfigLoaded(Err(e.to_string())),
+    }
+}
+
+/// Write the form back, preserving every field the form does not own.
+pub fn save_config(form: ConfigForm) -> JobMsg {
+    let mut cfg = match maestro_core::config::Config::ensure() {
+        Ok((c, _created)) => c,
+        Err(e) => return JobMsg::ConfigSaved(Err(e.to_string())),
+    };
+    if !form.workspace_root.trim().is_empty() {
+        cfg.general.workspace_root = std::path::PathBuf::from(form.workspace_root.trim());
+    }
+    cfg.general.question_mode = form.question_mode;
+    cfg.parallelism.global_cap = form.global_cap;
+    cfg.parallelism.per_provider_cap = form.per_provider_cap;
+    cfg.quotas.warn_pct = form.warn_pct;
+    cfg.quotas.crit_pct = form.crit_pct;
+    match cfg.save() {
+        Ok(()) => JobMsg::ConfigSaved(Ok(())),
+        Err(e) => JobMsg::ConfigSaved(Err(e.to_string())),
     }
 }
