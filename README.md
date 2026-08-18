@@ -44,7 +44,7 @@ Cargo workspace crates:
 | `maestro-orchestrator` | Global write queue, parallel DAG scheduler, git checkpoints, PRD→DAG generation |
 | `maestro-cliadapters` | PTY wrapping of external CLI agents (portable-pty/ConPTY), overlay + harvest |
 | `maestro-tui` | AppCUI front-end: dashboard, providers, rules, projects, questions, quick chat, transcripts, settings |
-| `maestro-gui` | egui/eframe desktop front-end: poller-backed snapshot, worker-thread jobs, dashboard, providers, projects |
+| `maestro-gui` | egui/eframe desktop front-end: poller-backed snapshot, worker-thread jobs, dashboard, providers, projects, settings |
 | `maestro-cli` | The `maestro` binary: headless commands + TUI and GUI launchers |
 
 Key design guarantees:

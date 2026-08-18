@@ -19,6 +19,7 @@ pub enum Action {
     Doctor,
     Exit,
     // Providers
+    AddProvider,
     DetectClis,
     HealthCheck,
     // Tools
@@ -73,12 +74,9 @@ pub fn show(ui: &mut egui::Ui) -> Option<Action> {
         });
 
         MenuButton::new("Providers").ui(ui, |ui| {
-            unimplemented_item(
-                ui,
-                "Add Provider",
-                "Needs a form with key storage and model discovery.\n\
-                 For now: maestro provider add --id <id> --ptype api --endpoint <url> --key <key>",
-            );
+            if item(ui, "Add Provider", "") {
+                action = Some(Action::AddProvider);
+            }
             if item(ui, "Detect CLIs & Ollama", "") {
                 action = Some(Action::DetectClis);
             }

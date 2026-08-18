@@ -10,6 +10,9 @@ use crate::jobs;
 
 pub fn show(app: &mut MaestroApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
+        if ui.button("Add provider").clicked() {
+            app.add_provider.open();
+        }
         let detecting = app.jobs.is_running(jobs::DETECT);
         if ui
             .add_enabled(!detecting, egui::Button::new("Detect CLIs & Ollama"))
@@ -53,6 +56,7 @@ pub fn show(app: &mut MaestroApp, ui: &mut egui::Ui) {
     // The detail pane is driven by this selection; keep a copy so the table
     // closure can mutate the selection without holding a borrow on the snapshot.
     let mut selected = app.selected_provider.clone();
+    let mut remove: Option<String> = None;
     let rows = app.snap.providers.clone();
     let health = app.health.clone();
 
@@ -70,9 +74,21 @@ pub fn show(app: &mut MaestroApp, ui: &mut egui::Ui) {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         detail(ui, p, health.get(&id));
                         ui.add_space(8.0);
-                        if ui.button("Close").clicked() {
-                            selected = None;
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Close").clicked() {
+                                selected = None;
+                            }
+                            let removing = app.jobs.is_running(jobs::REMOVE_PROVIDER);
+                            if ui
+                                .add_enabled(!removing, egui::Button::new("Remove"))
+                                .on_hover_text(
+                                    "Drops it from providers.toml and deletes its stored key.",
+                                )
+                                .clicked()
+                            {
+                                remove = Some(id.clone());
+                            }
+                        });
                     });
                 });
         }
@@ -148,6 +164,11 @@ pub fn show(app: &mut MaestroApp, ui: &mut egui::Ui) {
         });
 
     app.selected_provider = selected;
+
+    if let Some(id) = remove {
+        app.jobs
+            .spawn(jobs::REMOVE_PROVIDER, move || jobs::remove_provider(id));
+    }
 }
 
 fn detail(ui: &mut egui::Ui, p: &crate::state::ProviderRow, health: Option<&jobs::HealthRow>) {
