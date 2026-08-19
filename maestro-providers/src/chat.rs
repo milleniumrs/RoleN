@@ -17,6 +17,14 @@ impl ChatMessage {
             content: content.into(),
         }
     }
+
+    /// A reply from the model, so a front-end can feed the conversation back in.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -27,11 +35,29 @@ pub struct ChatRequest {
 }
 
 impl ChatRequest {
+    /// One-shot probe with a deliberately small cap - used by `provider test`.
+    /// Not suitable for a conversation: see [`ChatRequest::conversation`].
     pub fn single(model: impl Into<String>, prompt: impl Into<String>) -> Self {
         Self {
             model: model.into(),
             messages: vec![ChatMessage::user(prompt)],
             max_tokens: Some(256),
+        }
+    }
+
+    /// A multi-turn request carrying the whole history.
+    ///
+    /// The caller states its own output cap, because 256 tokens is a sensible
+    /// ceiling for a health probe and a useless one for a chat reply.
+    pub fn conversation(
+        model: impl Into<String>,
+        messages: Vec<ChatMessage>,
+        max_tokens: u32,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            messages,
+            max_tokens: Some(max_tokens),
         }
     }
 }

@@ -57,6 +57,8 @@ pub struct ProviderRow {
     pub kind: String,
     pub endpoint: Option<String>,
     pub models: usize,
+    /// Model ids, for the chat picker.
+    pub model_ids: Vec<String>,
     pub has_key: bool,
     pub is_cli: bool,
     pub tokens_today: u64,
@@ -433,6 +435,7 @@ fn collect(
                     kind: format!("{:?}", p.ptype).to_lowercase(),
                     endpoint: p.endpoint.clone(),
                     models: p.models.len(),
+                    model_ids: p.models.iter().map(|m| m.id.clone()).collect(),
                     has_key: p.key_ref.is_some(),
                     is_cli: p.ptype == maestro_core::types::ProviderType::Cli,
                     tokens_today: usage.tokens_in + usage.tokens_out,

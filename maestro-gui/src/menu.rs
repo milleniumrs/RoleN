@@ -24,6 +24,8 @@ pub enum Action {
     HealthCheck,
     // Rules
     DryRun,
+    // Sessions
+    QuickChat,
     // Tools
     Settings,
     Theme(egui::ThemePreference),
@@ -100,11 +102,9 @@ pub fn show(ui: &mut egui::Ui) -> Option<Action> {
         });
 
         MenuButton::new("Sessions").ui(ui, |ui| {
-            unimplemented_item(
-                ui,
-                "Quick Chat",
-                "Planned with real multi-turn history, which the TUI never had.",
-            );
+            if item(ui, "Quick Chat", "Ctrl+Q") {
+                action = Some(Action::QuickChat);
+            }
             unimplemented_item(
                 ui,
                 "Run CLI Task (PTY-wrapped agent)",
