@@ -19,6 +19,9 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Without this a stalled step runs until GitHub's six-hour limit. Two runs
+    # sat for eight hours on the apt step before anyone noticed.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -29,15 +32,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # AppCUI pulls in ncurses and the X11 clipboard stack on Linux; eframe
-      # adds winit + glow on top, which need xkbcommon, wayland and GL headers.
+      # adds winit on top, which needs xkbcommon and wayland.
+      #
+      # No mesa dev packages: glutin loads GL through dlopen at runtime, so the
+      # headers are not needed to build, and libgl1-mesa-dev alone pulled in 19
+      # extra packages including the vulkan and vdpau drivers.
+      #
+      # DEBIAN_FRONTEND and the lock timeout are here because this step has hung
+      # twice waiting on a dpkg lock held by the runner's unattended-upgrades;
+      # apt would otherwise wait forever rather than fail.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o DPkg::Lock::Timeout=180 update
+          sudo apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends \
             libncurses-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+            libxkbcommon-dev libwayland-dev
 
       - name: fmt (Maestro packages only — do not follow path deps)
         run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-gui -p maestro-cli -- --check

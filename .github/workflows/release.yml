@@ -20,7 +20,27 @@ env:
   VERSION: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # Checking out a tag that does not exist fails inside `git fetch` with a bare
+  # "exit code 1", once per matrix leg. Resolve it here instead so a mistyped or
+  # not-yet-created tag says so, once, before five builds start.
+  resolve:
+    name: Resolve tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the tag exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${{ github.repository }}.git"
+          if ! git ls-remote --exit-code --tags "$remote" "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error title=No such tag::'${VERSION}' is not a tag in this repository. Create and push it first:  git tag ${VERSION} && git push origin ${VERSION}"
+            exit 1
+          fi
+          echo "building ${VERSION}"
+
   build:
+    needs: resolve
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     # never let an unavailable runner label hang a release for hours
