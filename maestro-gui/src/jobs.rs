@@ -107,6 +107,33 @@ pub enum JobMsg {
         provider: String,
     },
     DryRun(Result<DryRun, String>),
+    ChatReply(Result<maestro_providers::conversation::Turn, String>),
+}
+
+/// Output cap for a chat reply. `ChatRequest::single` caps at 256, which is a
+/// health-probe budget, not an answer.
+pub const MAX_REPLY_TOKENS: u32 = 2048;
+
+/// Send one turn of a conversation. The history must already end with the
+/// message the user just typed.
+pub fn chat_turn(
+    provider_id: String,
+    model: String,
+    history: Vec<maestro_providers::chat::ChatMessage>,
+    session_id: String,
+    prior: maestro_providers::conversation::Totals,
+) -> JobMsg {
+    match maestro_providers::conversation::send(
+        &provider_id,
+        &model,
+        history,
+        &session_id,
+        prior,
+        MAX_REPLY_TOKENS,
+    ) {
+        Ok(turn) => JobMsg::ChatReply(Ok(turn)),
+        Err(e) => JobMsg::ChatReply(Err(e.to_string())),
+    }
 }
 
 /// What a rule dry-run concluded.
@@ -137,6 +164,7 @@ pub const NEW_PROJECT: &str = "new-project";
 pub const LOAD_CONFIG: &str = "load-config";
 pub const SAVE_CONFIG: &str = "save-config";
 pub const DRY_RUN: &str = "dry-run";
+pub const CHAT: &str = "chat";
 pub const DISCOVER_MODELS: &str = "discover-models";
 pub const SAVE_PROVIDER: &str = "save-provider";
 pub const REMOVE_PROVIDER: &str = "remove-provider";

@@ -74,6 +74,13 @@ pub struct MaestroApp {
     /// Cooperative stop for the routing sweep. Checked between providers - an
     /// HTTP request already in flight cannot be aborted.
     dry_run_cancel: Arc<AtomicBool>,
+    pub chat_provider: Option<String>,
+    pub chat_model: Option<String>,
+    /// The conversation exactly as it is sent to the provider.
+    pub chat_history: Vec<maestro_providers::chat::ChatMessage>,
+    pub chat_input: String,
+    pub chat_session: String,
+    pub chat_totals: maestro_providers::conversation::Totals,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
     about_open: bool,
@@ -113,6 +120,12 @@ impl MaestroApp {
             dry_run_result: None,
             dry_run_progress: None,
             dry_run_cancel: Arc::new(AtomicBool::new(false)),
+            chat_provider: None,
+            chat_model: None,
+            chat_history: Vec::new(),
+            chat_input: String::new(),
+            chat_session: maestro_providers::conversation::new_session_id(),
+            chat_totals: maestro_providers::conversation::Totals::default(),
             doctor: None,
             about_open: false,
             status: "ready".to_string(),
@@ -134,6 +147,74 @@ impl MaestroApp {
         let cancel = Arc::clone(&self.dry_run_cancel);
         self.jobs
             .spawn_streaming(jobs::DRY_RUN, move |emit| jobs::dry_run(role, cancel, emit));
+    }
+
+    /// Fold a finished turn back into the conversation.
+    ///
+    /// On success the reply joins the history, which is what makes the next
+    /// turn multi-turn at all. On failure the unanswered user message is
+    /// removed: leaving it would send two user messages in a row, a shape some
+    /// providers reject outright.
+    pub fn apply_chat_reply(
+        &mut self,
+        reply: Result<maestro_providers::conversation::Turn, String>,
+    ) {
+        match reply {
+            Ok(turn) => {
+                self.chat_totals.tokens_in += turn.tokens_in;
+                self.chat_totals.tokens_out += turn.tokens_out;
+                self.chat_totals.cost += turn.cost;
+                self.set_status(format!(
+                    "{} in / {} out · {} ms",
+                    turn.tokens_in, turn.tokens_out, turn.latency_ms
+                ));
+                self.chat_history
+                    .push(maestro_providers::chat::ChatMessage::assistant(
+                        turn.text.trim(),
+                    ));
+                self.poller.refresh_now();
+            }
+            Err(e) => {
+                self.chat_history.pop();
+                self.set_status(format!("chat failed: {e} (message not kept in history)"));
+            }
+        }
+    }
+
+    /// Start a fresh conversation: new history and a new ledger session, so
+    /// the old one keeps its own totals.
+    pub fn reset_chat(&mut self) {
+        self.chat_history.clear();
+        self.chat_totals = maestro_providers::conversation::Totals::default();
+        self.chat_session = maestro_providers::conversation::new_session_id();
+        self.set_status("new chat");
+    }
+
+    /// Append the typed message and send the whole conversation.
+    pub fn send_chat(&mut self) {
+        let (Some(provider), Some(model)) = (self.chat_provider.clone(), self.chat_model.clone())
+        else {
+            self.set_status("pick a provider and model first");
+            return;
+        };
+        let prompt = self.chat_input.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        self.chat_input.clear();
+        self.chat_history
+            .push(maestro_providers::chat::ChatMessage::user(prompt));
+
+        let history = self.chat_history.clone();
+        let session = self.chat_session.clone();
+        let prior = self.chat_totals;
+        self.set_status(format!(
+            "asking {provider}/{model} ({} turns of context)",
+            history.len()
+        ));
+        self.jobs.spawn(jobs::CHAT, move || {
+            jobs::chat_turn(provider, model, history, session, prior)
+        });
     }
 
     pub fn cancel_dry_run(&mut self) {
@@ -246,6 +327,7 @@ impl MaestroApp {
                     self.dry_run_progress = None;
                     self.set_status(format!("dry-run failed: {e}"));
                 }
+                JobMsg::ChatReply(reply) => self.apply_chat_reply(reply),
             }
         }
     }
@@ -278,6 +360,7 @@ impl MaestroApp {
                 self.view = View::Rules;
                 self.start_dry_run();
             }
+            Action::QuickChat => self.view = View::Chat,
             Action::Theme(pref) => ctx.set_theme(pref),
             Action::About => self.about_open = true,
         }
@@ -292,6 +375,7 @@ impl MaestroApp {
         const DOCTOR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F9);
         const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F10);
         const DRY_RUN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::D);
+        const CHAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Q);
         const ABOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
 
         ctx.input_mut(|i| {
@@ -303,6 +387,8 @@ impl MaestroApp {
                 Some(Action::Settings)
             } else if i.consume_shortcut(&DRY_RUN) {
                 Some(Action::DryRun)
+            } else if i.consume_shortcut(&CHAT) {
+                Some(Action::QuickChat)
             } else if i.consume_shortcut(&ABOUT) {
                 Some(Action::About)
             } else {
@@ -469,11 +555,7 @@ impl MaestroApp {
                     "Ledger stream: write tickets, routing decisions and quota events. The TUI \
                      never implemented this tab.",
                 ),
-                View::Chat => placeholder(
-                    ui,
-                    "Chat with real multi-turn history. The TUI sends every message as a fresh \
-                     single-message request, so the model never sees the conversation.",
-                ),
+                View::Chat => views::chat::show(self, ui),
             }
         });
     }
@@ -524,6 +606,7 @@ mod tests {
                     kind: "api".into(),
                     endpoint: Some("https://api.example.com".into()),
                     models: 3,
+                    model_ids: vec!["k2".into(), "k3".into(), "k2.7".into()],
                     has_key: true,
                     is_cli: false,
                     tokens_today: 12_345,
@@ -535,6 +618,7 @@ mod tests {
                     kind: "cli".into(),
                     endpoint: None,
                     models: 0,
+                    model_ids: vec![],
                     has_key: false,
                     is_cli: true,
                     tokens_today: 0,
@@ -805,6 +889,87 @@ mod tests {
             cancelled_flag.load(Ordering::Relaxed),
             "the old run keeps its own flag so it still stops"
         );
+    }
+
+    fn turn(text: &str) -> maestro_providers::conversation::Turn {
+        maestro_providers::conversation::Turn {
+            text: text.to_string(),
+            tokens_in: 10,
+            tokens_out: 20,
+            cost: 0.001,
+            latency_ms: 5,
+        }
+    }
+
+    /// The defect this whole view exists to fix: a reply must join the history
+    /// so the next request carries the conversation.
+    #[test]
+    fn a_reply_becomes_context_for_the_next_turn() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx);
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("hello"));
+        app.apply_chat_reply(Ok(turn("  hi there  ")));
+
+        assert_eq!(app.chat_history.len(), 2);
+        assert_eq!(app.chat_history[1].role, "assistant");
+        assert_eq!(app.chat_history[1].content, "hi there");
+        assert_eq!(app.chat_totals.tokens_in, 10);
+        assert_eq!(app.chat_totals.tokens_out, 20);
+
+        // A second exchange keeps accumulating rather than replacing.
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("more"));
+        app.apply_chat_reply(Ok(turn("sure")));
+        assert_eq!(app.chat_history.len(), 4);
+        assert_eq!(app.chat_totals.tokens_out, 40);
+    }
+
+    /// A failed turn must not leave two user messages in a row behind.
+    #[test]
+    fn a_failed_turn_is_removed_from_history() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx);
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("hello"));
+        app.apply_chat_reply(Err("HTTP 429".into()));
+        assert!(app.chat_history.is_empty());
+
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("a"));
+        app.apply_chat_reply(Ok(turn("b")));
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("c"));
+        app.apply_chat_reply(Err("boom".into()));
+        let roles: Vec<&str> = app.chat_history.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant"]);
+    }
+
+    /// A new chat must not bill its tokens to the previous conversation.
+    #[test]
+    fn resetting_starts_a_new_session() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx);
+        app.chat_history
+            .push(maestro_providers::chat::ChatMessage::user("hello"));
+        app.apply_chat_reply(Ok(turn("hi")));
+        let first = app.chat_session.clone();
+
+        app.reset_chat();
+        assert!(app.chat_history.is_empty());
+        assert_eq!(app.chat_totals.tokens_in, 0);
+        assert_ne!(app.chat_session, first);
+    }
+
+    /// Sending without a provider must not silently swallow the typed message.
+    #[test]
+    fn sending_without_a_provider_keeps_the_input() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx);
+        app.chat_input = "hello".into();
+        app.send_chat();
+        assert_eq!(app.chat_input, "hello");
+        assert!(app.chat_history.is_empty());
     }
 
     /// Collection problems are meant to be visible, not swallowed.

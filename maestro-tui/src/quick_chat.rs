@@ -2,79 +2,79 @@
 //! Sends run on a background task; tokens are ledgered like any session.
 
 use appcui::prelude::*;
-use maestro_core::types::{LedgerEntry, ProviderType, Session, SessionState};
+use maestro_core::types::ProviderType;
 use maestro_providers as providers;
+use providers::chat::ChatMessage;
+
+/// Output cap per reply. `ChatRequest::single` caps at 256, which is right for
+/// a health probe and far too small for an answer.
+const MAX_REPLY_TOKENS: u32 = 2048;
 
 pub enum ChatMsg {
     Done {
         text: String,
         tokens_in: u64,
         tokens_out: u64,
+        cost: f64,
         latency_ms: u64,
     },
     Failed(String),
 }
 
-static CHAT_JOB: std::sync::Mutex<Option<(String, String, String)>> = std::sync::Mutex::new(None);
+/// Everything the worker needs. A struct rather than a tuple because the
+/// conversation now travels with it.
+struct ChatJob {
+    provider_id: String,
+    model: String,
+    /// The whole conversation, ending with the message just typed.
+    history: Vec<ChatMessage>,
+    /// Stable for the life of the window, so the ledger shows one session per
+    /// conversation instead of one per message.
+    session_id: String,
+    /// Totals from earlier turns, so the session row accumulates.
+    prior_in: u64,
+    prior_out: u64,
+    prior_cost: f64,
+}
+
+static CHAT_JOB: std::sync::Mutex<Option<ChatJob>> = std::sync::Mutex::new(None);
 
 fn chat_worker(conector: &BackgroundTaskConector<ChatMsg, bool>) {
     let job = CHAT_JOB.lock().unwrap().take();
-    let Some((provider_id, model, prompt)) = job else {
+    let Some(job) = job else {
         return;
     };
-    let result = (|| -> anyhow::Result<ChatMsg> {
-        let reg = providers::ProviderRegistry::load()?;
-        let p = reg
-            .get(&provider_id)
-            .ok_or_else(|| anyhow::anyhow!("provider '{provider_id}' not found"))?
-            .clone();
-        let req = providers::chat::ChatRequest::single(model.clone(), prompt.clone());
-        let started = std::time::Instant::now();
-        let resp = providers::client::chat(&p, &req)?;
-        let latency = started.elapsed().as_millis() as u64;
-
-        // session + ledger (FR-4.6 / FR-9)
-        let session_id = format!(
-            "qc-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        if let Ok(ledger) = maestro_core::ledger::Ledger::open_default() {
-            let cost = providers::test::estimate_cost(&p, &model, resp.tokens_in, resp.tokens_out);
-            let _ = ledger.record(&LedgerEntry {
-                id: format!(
-                    "le-{}",
-                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-                ),
-                session_id: session_id.clone(),
-                provider_id: provider_id.clone(),
-                tokens_in: resp.tokens_in,
-                tokens_out: resp.tokens_out,
-                cost,
-                latency_ms: Some(resp.latency_ms),
-                ts: chrono::Utc::now(),
-            });
-            let _ = ledger.upsert_session(&Session {
-                id: session_id,
-                task_id: None,
-                provider_id,
-                model,
-                state: SessionState::Done,
-                tokens_in: resp.tokens_in,
-                tokens_out: resp.tokens_out,
-                cost,
-                started: chrono::Utc::now(),
-                transcript_path: None,
-            });
-        }
-        Ok(ChatMsg::Done {
-            text: resp.text,
-            tokens_in: resp.tokens_in,
-            tokens_out: resp.tokens_out,
-            latency_ms: latency,
-        })
-    })();
+    let ChatJob {
+        provider_id,
+        model,
+        history,
+        session_id,
+        prior_in,
+        prior_out,
+        prior_cost,
+    } = job;
+    // The whole conversation goes over the wire, not just the last line; the
+    // ledger bookkeeping lives in maestro-providers so the GUI shares it.
+    let result = providers::conversation::send(
+        &provider_id,
+        &model,
+        history,
+        &session_id,
+        providers::conversation::Totals {
+            tokens_in: prior_in,
+            tokens_out: prior_out,
+            cost: prior_cost,
+        },
+        MAX_REPLY_TOKENS,
+    );
     conector.notify(match result {
-        Ok(m) => m,
+        Ok(turn) => ChatMsg::Done {
+            text: turn.text,
+            tokens_in: turn.tokens_in,
+            tokens_out: turn.tokens_out,
+            cost: turn.cost,
+            latency_ms: turn.latency_ms,
+        },
         Err(e) => ChatMsg::Failed(e.to_string()),
     });
 }
@@ -89,6 +89,17 @@ pub struct QuickChat {
     b_close: Handle<Button>,
     l_status: Handle<Label>,
     bt: Handle<BackgroundTask<ChatMsg, bool>>,
+    /// The conversation as the model sees it. Without this every send was a
+    /// brand-new one-message request and the model never saw what came before.
+    history: Vec<ChatMessage>,
+    session_id: String,
+    /// One send at a time: the worker takes its parameters from a single
+    /// global slot, so a second concurrent send would find it empty and be
+    /// silently dropped.
+    busy: bool,
+    total_in: u64,
+    total_out: u64,
+    total_cost: f64,
 }
 
 impl QuickChat {
@@ -107,6 +118,15 @@ impl QuickChat {
             b_close: Handle::None,
             l_status: Handle::None,
             bt: Handle::None,
+            history: Vec::new(),
+            session_id: format!(
+                "qc-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            ),
+            busy: false,
+            total_in: 0,
+            total_out: 0,
+            total_cost: 0.0,
         };
         w.add(label!("'&Provider:',l:1,t:0,w:10"));
         let mut cbp = ComboBox::new(layout!("l:11,t:0,w:26"), combobox::Flags::None);
@@ -188,6 +208,10 @@ impl QuickChat {
     }
 
     fn send(&mut self) {
+        if self.busy {
+            self.set_status("still waiting for the previous reply …");
+            return;
+        }
         let (Some(provider), Some(model)) = (self.selected_provider(), self.selected_model())
         else {
             self.set_status("pick provider and model first");
@@ -205,9 +229,22 @@ impl QuickChat {
         if let Some(t) = self.control_mut(h) {
             t.set_text("");
         }
-        *CHAT_JOB.lock().unwrap() = Some((provider.clone(), model.clone(), prompt));
+        self.history.push(ChatMessage::user(prompt));
+        *CHAT_JOB.lock().unwrap() = Some(ChatJob {
+            provider_id: provider.clone(),
+            model: model.clone(),
+            history: self.history.clone(),
+            session_id: self.session_id.clone(),
+            prior_in: self.total_in,
+            prior_out: self.total_out,
+            prior_cost: self.total_cost,
+        });
+        self.busy = true;
         self.bt = BackgroundTask::<ChatMsg, bool>::run(chat_worker, self.handle());
-        self.set_status(&format!("→ {provider}/{model} …"));
+        self.set_status(&format!(
+            "→ {provider}/{model} … ({} turns)",
+            self.history.len()
+        ));
     }
 }
 
@@ -245,14 +282,28 @@ impl BackgroundTaskEvents<ChatMsg, bool> for QuickChat {
                 text,
                 tokens_in,
                 tokens_out,
+                cost,
                 latency_ms,
             } => {
+                self.busy = false;
+                self.total_in += tokens_in;
+                self.total_out += tokens_out;
+                self.total_cost += cost;
                 self.append_log(&format!("🤖 {}", text.trim()));
+                // Feed the reply back so the next turn has the full context.
+                self.history.push(ChatMessage::assistant(text.trim()));
                 self.set_status(&format!(
-                    "{tokens_in} in / {tokens_out} out · {latency_ms} ms · ledgered"
+                    "{tokens_in} in / {tokens_out} out · {latency_ms} ms · session {} in / {} out",
+                    self.total_in, self.total_out
                 ));
             }
-            ChatMsg::Failed(e) => self.set_status(&format!("failed: {e}")),
+            ChatMsg::Failed(e) => {
+                self.busy = false;
+                // Drop the turn that never got an answer: leaving it would send
+                // two user messages in a row, which some providers reject.
+                self.history.pop();
+                self.set_status(&format!("failed: {e} (message not kept in history)"));
+            }
         }
         EventProcessStatus::Processed
     }

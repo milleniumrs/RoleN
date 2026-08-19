@@ -7,6 +7,7 @@
 pub mod anthropic;
 pub mod chat;
 pub mod client;
+pub mod conversation;
 pub mod detect;
 pub mod error;
 pub mod generate;
