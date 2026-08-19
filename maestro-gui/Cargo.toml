@@ -11,4 +11,5 @@ eframe.workspace = true
 egui_extras.workspace = true
 maestro-core.workspace = true
 maestro-providers.workspace = true
+maestro-cliadapters.workspace = true
 chrono.workspace = true

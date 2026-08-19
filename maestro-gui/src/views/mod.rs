@@ -2,6 +2,7 @@
 //! the app owns all state and the views stay free of their own caches - the
 //! snapshot is the single source of truth for anything read from disk.
 
+pub mod activity;
 pub mod chat;
 pub mod dashboard;
 pub mod projects;

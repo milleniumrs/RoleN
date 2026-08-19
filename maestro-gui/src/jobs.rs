@@ -108,6 +108,88 @@ pub enum JobMsg {
     },
     DryRun(Result<DryRun, String>),
     ChatReply(Result<maestro_providers::conversation::Turn, String>),
+    /// A chunk of live PTY output from a wrapped CLI agent.
+    CliOutput(String),
+    CliHarvested {
+        applied: usize,
+        rejected: usize,
+        paths: Vec<String>,
+    },
+    CliFinished(Result<CliReport, String>),
+}
+
+/// What a finished CLI session produced.
+#[derive(Debug, Clone)]
+pub struct CliReport {
+    pub session_id: String,
+    pub exit_code: Option<i32>,
+    pub applied: usize,
+    pub rejected: usize,
+    pub paths: Vec<String>,
+    pub transcript: std::path::PathBuf,
+    pub tokens_in_est: u64,
+    pub tokens_out_est: u64,
+}
+
+/// Run a task through a PTY-wrapped CLI agent, streaming its output.
+///
+/// This is the only genuinely streaming path in the workspace: the adapter
+/// hands over stdout chunks at roughly 80 ms intervals, so the UI can show the
+/// agent working instead of freezing until it exits. The TUI discards those
+/// events entirely (`mission_control.rs:108` passes `&mut |_| {}`) and shows
+/// only the final report.
+pub fn run_cli_task(
+    provider_id: String,
+    task: String,
+    workdir: std::path::PathBuf,
+    emit: &Emitter,
+) -> JobMsg {
+    let reg = match maestro_providers::ProviderRegistry::load() {
+        Ok(r) => r,
+        Err(e) => return JobMsg::CliFinished(Err(e.to_string())),
+    };
+    let Some(provider) = reg.get(&provider_id).cloned() else {
+        return JobMsg::CliFinished(Err(format!("provider '{provider_id}' is not registered")));
+    };
+    if provider.cli_path.is_none() {
+        return JobMsg::CliFinished(Err(format!(
+            "provider '{provider_id}' has no cli path, so there is nothing to run"
+        )));
+    }
+
+    let mut on_event = |event: maestro_cliadapters::CliEvent| match event {
+        maestro_cliadapters::CliEvent::Output(chunk) => {
+            emit.progress(JobMsg::CliOutput(chunk));
+        }
+        maestro_cliadapters::CliEvent::Harvested {
+            applied,
+            rejected,
+            paths,
+        } => {
+            emit.progress(JobMsg::CliHarvested {
+                applied,
+                rejected,
+                paths,
+            });
+        }
+    };
+
+    // `None` for the queue: the adapter makes its own. Sharing one across
+    // concurrent sessions is what preserves single-writer ordering, and will
+    // matter once more than one session can run at a time.
+    match maestro_cliadapters::run_cli_session(&provider, &task, &workdir, None, &mut on_event) {
+        Ok(report) => JobMsg::CliFinished(Ok(CliReport {
+            session_id: report.session_id,
+            exit_code: report.exit_code,
+            applied: report.applied,
+            rejected: report.rejected,
+            paths: report.paths,
+            transcript: report.transcript_path,
+            tokens_in_est: report.tokens_in_est,
+            tokens_out_est: report.tokens_out_est,
+        })),
+        Err(e) => JobMsg::CliFinished(Err(e.to_string())),
+    }
 }
 
 /// Output cap for a chat reply. `ChatRequest::single` caps at 256, which is a
@@ -165,6 +247,7 @@ pub const LOAD_CONFIG: &str = "load-config";
 pub const SAVE_CONFIG: &str = "save-config";
 pub const DRY_RUN: &str = "dry-run";
 pub const CHAT: &str = "chat";
+pub const CLI_TASK: &str = "cli-task";
 pub const DISCOVER_MODELS: &str = "discover-models";
 pub const SAVE_PROVIDER: &str = "save-provider";
 pub const REMOVE_PROVIDER: &str = "remove-provider";
@@ -204,6 +287,11 @@ impl Jobs {
             rx,
             running: BTreeSet::new(),
         }
+    }
+
+    /// The egui context, for code that needs it while handling a result.
+    pub fn ctx(&self) -> &egui::Context {
+        &self.ctx
     }
 
     /// Is this specific job in flight?

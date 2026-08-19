@@ -2488,6 +2488,7 @@ dependencies = [
  "chrono",
  "eframe",
  "egui_extras",
+ "maestro-cliadapters",
  "maestro-core",
  "maestro-providers",
 ]

@@ -26,6 +26,7 @@ pub enum Action {
     DryRun,
     // Sessions
     QuickChat,
+    RunCliTask,
     // Tools
     Settings,
     Theme(egui::ThemePreference),
@@ -105,12 +106,9 @@ pub fn show(ui: &mut egui::Ui) -> Option<Action> {
             if item(ui, "Quick Chat", "Ctrl+Q") {
                 action = Some(Action::QuickChat);
             }
-            unimplemented_item(
-                ui,
-                "Run CLI Task (PTY-wrapped agent)",
-                "The adapter streams PTY output live; the GUI should show it as it arrives.\n\
-                 For now: maestro cli run --provider <id> --task <text>",
-            );
+            if item(ui, "Run CLI Task (PTY-wrapped agent)", "") {
+                action = Some(Action::RunCliTask);
+            }
             unimplemented_item(ui, "Pause All", "Arrives with session control.");
         });
 

@@ -408,6 +408,142 @@ fn mode_label(mode: QuestionMode) -> &'static str {
     }
 }
 
+/// `Sessions > Run CLI Task`.
+#[derive(Default)]
+pub struct CliTaskDialog {
+    open: bool,
+    pub provider: Option<String>,
+    task: String,
+    workdir: String,
+    error: Option<String>,
+}
+
+/// A CLI run request, once confirmed.
+pub struct CliTaskRequest {
+    pub provider: String,
+    pub task: String,
+    pub workdir: std::path::PathBuf,
+}
+
+impl CliTaskDialog {
+    /// `providers` is the list of registered `cli` provider ids.
+    pub fn open(&mut self, providers: &[String], default_workdir: String) {
+        *self = Self {
+            open: true,
+            provider: providers.first().cloned(),
+            workdir: default_workdir,
+            ..Default::default()
+        };
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context, providers: &[String]) -> Option<CliTaskRequest> {
+        if !self.open {
+            return None;
+        }
+        let mut request = None;
+        let mut close = false;
+
+        let response = egui::Modal::new(egui::Id::new("cli-task-modal")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.heading("Run CLI task");
+            ui.add_space(8.0);
+
+            if providers.is_empty() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(0xc6, 0x28, 0x28),
+                    "No cli providers are registered with a binary path.",
+                );
+            }
+
+            egui::Grid::new("cli-task-fields")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Agent");
+                    egui::ComboBox::from_id_salt("cli-task-provider")
+                        .selected_text(self.provider.clone().unwrap_or_else(|| "-".into()))
+                        .show_ui(ui, |ui| {
+                            for id in providers {
+                                ui.selectable_value(&mut self.provider, Some(id.clone()), id);
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("Working directory");
+                    ui.add(egui::TextEdit::singleline(&mut self.workdir).desired_width(380.0));
+                    ui.end_row();
+
+                    ui.label("Task");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.task)
+                            .desired_width(380.0)
+                            .desired_rows(4)
+                            .hint_text("what the agent should do"),
+                    );
+                    ui.end_row();
+                });
+
+            ui.add_space(6.0);
+            ui.weak(
+                "The workspace is copied to a staging directory, the agent runs there, and its \
+                 changes come back through the write queue.",
+            );
+
+            if let Some(err) = &self.error {
+                ui.add_space(6.0);
+                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Run").clicked() {
+                    match self.validate() {
+                        Some(err) => self.error = Some(err),
+                        None => {
+                            request = Some(CliTaskRequest {
+                                provider: self.provider.clone().unwrap_or_default(),
+                                task: self.task.trim().to_string(),
+                                workdir: std::path::PathBuf::from(self.workdir.trim()),
+                            });
+                            close = true;
+                        }
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+
+        if close || response.should_close() {
+            self.open = false;
+        }
+        request
+    }
+
+    fn validate(&self) -> Option<String> {
+        if self.provider.is_none() {
+            return Some("pick an agent".to_string());
+        }
+        if self.task.trim().is_empty() {
+            return Some("describe the task".to_string());
+        }
+        let dir = self.workdir.trim();
+        if dir.is_empty() {
+            return Some("a working directory is required".to_string());
+        }
+        if !std::path::Path::new(dir).is_dir() {
+            // Caught here rather than after the workspace copy has begun.
+            return Some(format!("'{dir}' is not a directory"));
+        }
+        None
+    }
+}
+
 /// Fields for `File > New Project`.
 #[derive(Default)]
 pub struct NewProjectDialog {
