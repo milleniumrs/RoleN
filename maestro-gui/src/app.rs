@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use crate::dialogs::{AddProviderDialog, NewProjectDialog, ProviderRequest, SettingsDialog};
+use crate::dialogs::{
+    AddProviderDialog, CliTaskDialog, NewProjectDialog, ProviderRequest, SettingsDialog,
+};
 use crate::jobs::{self, CheckRow, DryRun, HealthRow, JobMsg, Jobs};
 use crate::menu::{self, Action};
 use crate::state::{Poller, Snapshot};
@@ -81,6 +83,10 @@ pub struct MaestroApp {
     pub chat_input: String,
     pub chat_session: String,
     pub chat_totals: maestro_providers::conversation::Totals,
+    pub cli_task: CliTaskDialog,
+    /// Live agent output, ANSI already stripped.
+    pub cli_output: String,
+    pub cli_report: Option<jobs::CliReport>,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
     about_open: bool,
@@ -126,6 +132,9 @@ impl MaestroApp {
             chat_input: String::new(),
             chat_session: maestro_providers::conversation::new_session_id(),
             chat_totals: maestro_providers::conversation::Totals::default(),
+            cli_task: CliTaskDialog::default(),
+            cli_output: String::new(),
+            cli_report: None,
             doctor: None,
             about_open: false,
             status: "ready".to_string(),
@@ -147,6 +156,47 @@ impl MaestroApp {
         let cancel = Arc::clone(&self.dry_run_cancel);
         self.jobs
             .spawn_streaming(jobs::DRY_RUN, move |emit| jobs::dry_run(role, cancel, emit));
+    }
+
+    /// Ids of cli providers that can actually be run.
+    pub fn runnable_cli_providers(&self) -> Vec<String> {
+        self.snap
+            .providers
+            .iter()
+            .filter(|p| p.is_cli)
+            .map(|p| p.id.clone())
+            .collect()
+    }
+
+    pub fn open_cli_task(&mut self) {
+        let providers = self.runnable_cli_providers();
+        let workdir = self
+            .snap
+            .workspace_root
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        self.cli_task.open(&providers, workdir);
+    }
+
+    /// Append a chunk of agent output.
+    ///
+    /// The buffer is capped: a chatty agent can emit megabytes, and egui lays
+    /// the whole label out every frame.
+    fn append_cli_output(&mut self, chunk: &str, ctx: &egui::Context) {
+        const CAP: usize = 200_000;
+        self.cli_output
+            .push_str(&crate::text::strip_ansi(&crate::text::renderable(
+                ctx, chunk,
+            )));
+        if self.cli_output.len() > CAP {
+            // Drop from the front on a char boundary, keeping the tail.
+            let cut = self.cli_output.len() - CAP;
+            let cut = (cut..self.cli_output.len())
+                .find(|i| self.cli_output.is_char_boundary(*i))
+                .unwrap_or(self.cli_output.len());
+            self.cli_output.drain(..cut);
+        }
     }
 
     /// Fold a finished turn back into the conversation.
@@ -328,6 +378,35 @@ impl MaestroApp {
                     self.set_status(format!("dry-run failed: {e}"));
                 }
                 JobMsg::ChatReply(reply) => self.apply_chat_reply(reply),
+                JobMsg::CliOutput(chunk) => {
+                    let ctx = self.jobs.ctx().clone();
+                    self.append_cli_output(&chunk, &ctx);
+                }
+                JobMsg::CliHarvested {
+                    applied,
+                    rejected,
+                    paths,
+                } => {
+                    self.set_status(format!(
+                        "harvested {applied} write(s), {rejected} rejected across {} path(s)",
+                        paths.len()
+                    ));
+                }
+                JobMsg::CliFinished(Ok(report)) => {
+                    self.set_status(format!(
+                        "session {} finished (exit {})",
+                        report.session_id,
+                        report
+                            .exit_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "unknown".into())
+                    ));
+                    self.cli_report = Some(report);
+                    self.poller.refresh_now();
+                }
+                JobMsg::CliFinished(Err(e)) => {
+                    self.set_status(format!("cli session failed: {e}"));
+                }
             }
         }
     }
@@ -361,6 +440,7 @@ impl MaestroApp {
                 self.start_dry_run();
             }
             Action::QuickChat => self.view = View::Chat,
+            Action::RunCliTask => self.open_cli_task(),
             Action::Theme(pref) => ctx.set_theme(pref),
             Action::About => self.about_open = true,
         }
@@ -407,6 +487,21 @@ impl MaestroApp {
         if let Some(form) = self.settings.show(ctx) {
             self.jobs
                 .spawn(jobs::SAVE_CONFIG, move || jobs::save_config(form));
+        }
+
+        let cli_providers = self.runnable_cli_providers();
+        if let Some(req) = self.cli_task.show(ctx, &cli_providers) {
+            self.cli_output.clear();
+            self.cli_report = None;
+            self.view = View::Activity;
+            self.set_status(format!(
+                "starting {} in {}",
+                req.provider,
+                req.workdir.display()
+            ));
+            self.jobs.spawn_streaming(jobs::CLI_TASK, move |emit| {
+                jobs::run_cli_task(req.provider, req.task, req.workdir, emit)
+            });
         }
 
         match self.add_provider.show(ctx) {
@@ -550,11 +645,7 @@ impl MaestroApp {
                     "The interrogation centre: pending clarifications grouped by project, \
                      answered with generated forms instead of one modal per question.",
                 ),
-                View::Activity => placeholder(
-                    ui,
-                    "Ledger stream: write tickets, routing decisions and quota events. The TUI \
-                     never implemented this tab.",
-                ),
+                View::Activity => views::activity::show(self, ui),
                 View::Chat => views::chat::show(self, ui),
             }
         });
@@ -891,6 +982,17 @@ mod tests {
         );
     }
 
+    /// Fonts are built lazily, and stripping output consults them, so lay out
+    /// one frame first - exactly what happens before any real chunk arrives.
+    fn warmed() -> egui::Context {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.label("warm up");
+        });
+        out.textures_delta.clear();
+        ctx
+    }
+
     fn turn(text: &str) -> maestro_providers::conversation::Turn {
         maestro_providers::conversation::Turn {
             text: text.to_string(),
@@ -970,6 +1072,57 @@ mod tests {
         app.send_chat();
         assert_eq!(app.chat_input, "hello");
         assert!(app.chat_history.is_empty());
+    }
+
+    /// A chatty agent must not grow the buffer without bound, and trimming
+    /// must not split a multi-byte character.
+    #[test]
+    fn agent_output_is_capped_without_breaking_utf8() {
+        let ctx = warmed();
+        let mut app = MaestroApp::headless(ctx.clone());
+        for _ in 0..40 {
+            // 10k of multi-byte text per chunk.
+            app.append_cli_output(&"é".repeat(5_000), &ctx);
+        }
+        assert!(app.cli_output.len() <= 200_000 + 16);
+        // Still valid UTF-8 and still the same character throughout.
+        assert!(app.cli_output.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn agent_output_has_escape_codes_stripped() {
+        let ctx = warmed();
+        let mut app = MaestroApp::headless(ctx.clone());
+        app.append_cli_output("\u{1b}[32m[mock-agent] done\u{1b}[0m\r\n", &ctx);
+        assert_eq!(app.cli_output, "[mock-agent] done\n");
+    }
+
+    #[test]
+    fn activity_renders_a_finished_report() {
+        let ctx = egui::Context::default();
+        let mut app = MaestroApp::headless(ctx.clone());
+        app.view = View::Activity;
+        app.snap = populated();
+        app.cli_output = "[mock-agent] working...\n".into();
+        app.cli_report = Some(crate::jobs::CliReport {
+            session_id: "cli-123".into(),
+            exit_code: Some(0),
+            applied: 2,
+            rejected: 1,
+            paths: vec!["mock-created.md".into(), "existing.txt".into()],
+            transcript: PathBuf::from("/tmp/cli-123.log"),
+            tokens_in_est: 1200,
+            tokens_out_est: 800,
+        });
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
+            output.textures_delta.clear();
+        }
+
+        // A non-zero exit renders down a different branch.
+        app.cli_report.as_mut().unwrap().exit_code = Some(2);
+        let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
+        output.textures_delta.clear();
     }
 
     /// Collection problems are meant to be visible, not swallowed.

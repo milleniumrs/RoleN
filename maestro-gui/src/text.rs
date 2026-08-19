@@ -57,6 +57,58 @@ pub fn renderable(ctx: &egui::Context, text: &str) -> String {
     })
 }
 
+/// Remove ANSI/VT escape sequences from PTY output.
+///
+/// A wrapped CLI agent talks to a terminal, so its stream is full of colour
+/// codes, cursor moves and title sets. Painted verbatim in a label they are
+/// visible garbage, so they are dropped before display. Carriage returns are
+/// normalised too: `\r\n` becomes `\n`, and a bare `\r` (a progress line
+/// rewriting itself) is dropped rather than shown.
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                // CSI: parameters, then a final byte in @..~
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: runs until BEL or the two-byte string terminator.
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                // Two-character sequences such as charset selection.
+                Some('(' | ')' | '#') => {
+                    chars.next();
+                }
+                // A lone escape, or anything else: drop the pair.
+                _ => {}
+            },
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                    out.push('\n');
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +143,31 @@ mod tests {
             "every glyph must be drawable after substitution, got {fixed:?}"
         );
         assert!(!fixed.contains('\u{2192}'));
+    }
+
+    #[test]
+    fn colour_codes_are_removed_but_the_text_survives() {
+        assert_eq!(
+            strip_ansi("\u{1b}[32m[mock-agent] done\u{1b}[0m"),
+            "[mock-agent] done"
+        );
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn cursor_moves_and_window_titles_are_removed() {
+        assert_eq!(strip_ansi("a\u{1b}[2J\u{1b}[Hb"), "ab");
+        // OSC terminated by BEL and by the string terminator.
+        assert_eq!(strip_ansi("x\u{1b}]0;title\u{7}y"), "xy");
+        assert_eq!(strip_ansi("x\u{1b}]0;title\u{1b}\\y"), "xy");
+    }
+
+    /// A progress line rewriting itself should not become a jumble; the
+    /// newline form of a line break must still survive.
+    #[test]
+    fn carriage_returns_are_normalised() {
+        assert_eq!(strip_ansi("one\r\ntwo"), "one\ntwo");
+        assert_eq!(strip_ansi("50%\r100%"), "50%100%");
     }
 
     /// A symbol with no entry in the table must not vanish silently.
