@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""md -> LaTeX converter for Maestro docs (MiKTeX/xelatex build).
+"""md -> LaTeX converter for RoleN docs (MiKTeX/xelatex build).
 
-Handles the Markdown subset used by Maestro's docs: headings, fenced code
+Handles the Markdown subset used by RoleN's docs: headings, fenced code
 blocks (ASCII wireframes), tables, nested lists, bold/italic, inline code.
 Sanitizes Unicode glyphs that standard Windows fonts lack.
 """
@@ -203,10 +203,10 @@ PREAMBLE = r"""\documentclass[10pt,a4paper]{article}
 \setlength{\parindent}{0pt}
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small Maestro --- TUI Design}
+\fancyhead[L]{\small RoleN --- TUI Design}
 \fancyhead[R]{\small\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
-\title{\textbf{Maestro --- TUI Design}\\[2pt]
+\title{\textbf{RoleN --- TUI Design}\\[2pt]
 \large Wireframes, interaction flows and settings inventory}
 \author{}
 \date{}

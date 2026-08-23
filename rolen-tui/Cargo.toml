@@ -1,0 +1,17 @@
+[package]
+name = "rolen-tui"
+description = "AppCUI-based terminal UI for RoleN (PRD FR-10, docs/TUI-DESIGN.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+appcui.workspace = true
+rolen-core.workspace = true
+rolen-providers.workspace = true
+rolen-orchestrator.workspace = true
+rolen-cliadapters.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde_yaml.workspace = true

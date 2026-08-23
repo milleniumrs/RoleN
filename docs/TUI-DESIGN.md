@@ -1,4 +1,4 @@
-# Maestro — TUI Design
+# RoleN — TUI Design
 
 Companion to the design decisions (FR-10). All wireframes are schematic mock-ups of AppCUI
 windows/controls (rendered as vector figures in the PDF build). AppCUI model: a **desktop** hosts multiple
@@ -15,7 +15,7 @@ windows/controls (rendered as vector figures in the PDF build). AppCUI model: a 
 3. **Nothing hidden.** Pending questions, write-queue depth and quota alarms are always
    one glance away (app bar + dashboard ticker).
 4. **Keyboard-first.** Global hotkeys work from any window; every form is tab-navigable.
-5. **Same core for TUI and CLI** — the TUI is a view; `maestro-cli` can do everything.
+5. **Same core for TUI and CLI** — the TUI is a view; `rolen-cli` can do everything.
 
 ---
 
@@ -23,7 +23,7 @@ windows/controls (rendered as vector figures in the PDF build). AppCUI model: a 
 
 <!-- tikz: chrome -->
 ```
-┌ Maestro ───────────────────────────────────────────────────────────────────────┐
+┌ RoleN ───────────────────────────────────────────────────────────────────────┐
 │  File  Project  Providers  Rules  Sessions  View  Tools  Help                    │ ← menu bar
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
@@ -164,7 +164,7 @@ rule decisions, quota events, migrations, alerts. Export CSV/JSON buttons.
 
 ## 4. Project Window (satellite, one per project)
 
-Opened from Projects tab (`Enter`) or `maestro project open shop`.
+Opened from Projects tab (`Enter`) or `rolen project open shop`.
 
 <!-- tikz: project-window -->
 ```
@@ -272,12 +272,12 @@ right side shows the section's form. **[Save] applies to TOML live; [Defaults] r
 4. **Quota setup**: for each provider pick source (auto / manual budget) + plan limits.
 5. **Default rules**: proposed from capabilities (e.g. tool-runner → ollama local);
    user confirms in the rule editor.
-6. Done → Mission Control. `maestro config doctor` summary shown.
+6. Done → Mission Control. `rolen config doctor` summary shown.
 
 ### 7.2 New project
 1. `Ctrl+N` → wizard: name, dir, stack, git init.
 2. **Interview** (interrogator role, FR-6): batched forms; answers stream into PRD.json.
-3. Maestro drafts **PRD.md** → user reviews in markdown tab → approve → PRD.json compiled.
+3. RoleN drafts **PRD.md** → user reviews in markdown tab → approve → PRD.json compiled.
 4. **AGENTS.md + skill suggestions** generated; user checks which skills to install.
 5. **Task DAG proposal** shown in the project's tree; user edits/reorders → **Run**.
 6. Sessions spawn per rule routing; dashboard shows them; questions may reappear
@@ -340,7 +340,7 @@ Open session window → type in steer box → message injected into agent loop.
 |---|---|---|
 | Mission Control | main (maximized) | startup |
 | Onboarding wizard | modal | first run / Tools |
-| Project window | satellite | Projects tab, `maestro project open` |
+| Project window | satellite | Projects tab, `rolen project open` |
 | Session/Chat window | satellite | dashboard/chat tab, Quick Chat promote |
 | Quick Chat | satellite | `Ctrl+Q` |
 | Provider window | modal-ish | Providers tab |

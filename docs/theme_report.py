@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report which background colours each Maestro theme actually paints.
+"""Report which background colours each RoleN theme actually paints.
 
 Runs the offscreen renderer (examples/theme_dump.rs) for every theme and
 counts the ANSI background codes of the rendered cells, so "is this theme
@@ -20,7 +20,7 @@ BG = {
     103: ("yellow", "light"), 104: ("blue", "light"), 105: ("pink", "light"),
     106: ("aqua", "light"), 107: ("white", "light"),
 }
-THEME_SRC = "maestro-tui/src/theme.rs"
+THEME_SRC = "rolen-tui/src/theme.rs"
 CELL = re.compile(r"\x1b\[(\d+(?:;\d+)*)m")
 
 
@@ -33,7 +33,7 @@ def known_themes():
 
 def render(theme: str) -> str:
     out = subprocess.run(
-        ["cargo", "run", "-q", "-p", "maestro-tui", "--example", "theme_dump", "--", theme, "100", "26"],
+        ["cargo", "run", "-q", "-p", "rolen-tui", "--example", "theme_dump", "--", theme, "100", "26"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     return out.stdout

@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "maestro-core",
-    "maestro-orchestrator",
-    "maestro-providers",
-    "maestro-runtime",
-    "maestro-cliadapters",
-    "maestro-tui",
-    "maestro-gui",
-    "maestro-cli",
+    "rolen-core",
+    "rolen-orchestrator",
+    "rolen-providers",
+    "rolen-runtime",
+    "rolen-cliadapters",
+    "rolen-tui",
+    "rolen-gui",
+    "rolen-cli",
 ]
 
 [workspace.package]
@@ -33,13 +33,13 @@ eframe = { version = "0.36", default-features = false, features = [
     "wayland",
 ] }
 egui_extras = "0.36"
-maestro-core = { path = "maestro-core" }
-maestro-tui = { path = "maestro-tui" }
-maestro-gui = { path = "maestro-gui" }
-maestro-providers = { path = "maestro-providers" }
-maestro-runtime = { path = "maestro-runtime" }
-maestro-orchestrator = { path = "maestro-orchestrator" }
-maestro-cliadapters = { path = "maestro-cliadapters" }
+rolen-core = { path = "rolen-core" }
+rolen-tui = { path = "rolen-tui" }
+rolen-gui = { path = "rolen-gui" }
+rolen-providers = { path = "rolen-providers" }
+rolen-runtime = { path = "rolen-runtime" }
+rolen-orchestrator = { path = "rolen-orchestrator" }
+rolen-cliadapters = { path = "rolen-cliadapters" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

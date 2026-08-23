@@ -1,0 +1,14 @@
+[package]
+name = "rolen-runtime"
+description = "Built-in agent loop with ticket-only writes (PRD FR-12)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rolen-core.workspace = true
+rolen-providers = { path = "../rolen-providers" }
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true

@@ -14,7 +14,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN: maestro
+  BIN: rolen
   # on workflow_dispatch GITHUB_REF_NAME is the *branch*, so the explicit tag
   # input must win; on a tag push there is no input and ref_name is the tag
   VERSION: ${{ github.event.inputs.tag || github.ref_name }}
@@ -98,7 +98,7 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p maestro-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p rolen-cli
 
       - name: Package
         shell: bash
@@ -151,7 +151,7 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION }}
-          name: Maestro ${{ env.VERSION }}
+          name: RoleN ${{ env.VERSION }}
           draft: false
           generate_release_notes: true
           body: |
@@ -159,21 +159,21 @@ jobs:
 
             | OS | Architecture | File |
             |---|---|---|
-            | Windows | x86_64 | `maestro-*-windows-x86_64.zip` |
-            | Linux | x86_64 | `maestro-*-linux-x86_64.tar.gz` |
-            | Linux | aarch64 | `maestro-*-linux-aarch64.tar.gz` |
-            | macOS | Apple Silicon | `maestro-*-macos-aarch64.tar.gz` |
-            | macOS | Intel | `maestro-*-macos-x86_64.tar.gz` |
+            | Windows | x86_64 | `rolen-*-windows-x86_64.zip` |
+            | Linux | x86_64 | `rolen-*-linux-x86_64.tar.gz` |
+            | Linux | aarch64 | `rolen-*-linux-aarch64.tar.gz` |
+            | macOS | Apple Silicon | `rolen-*-macos-aarch64.tar.gz` |
+            | macOS | Intel | `rolen-*-macos-x86_64.tar.gz` |
 
-            Each archive contains the `maestro` binary, the README, the licence and the design PDF.
+            Each archive contains the `rolen` binary, the README, the licence and the design PDF.
             Verify with `sha256sum -c SHA256SUMS`.
 
             ### Quick start
             ```sh
-            maestro config doctor          # verify the environment
-            maestro provider detect --register
-            maestro                        # launch the TUI
-            maestro gui                    # launch the desktop window
+            rolen config doctor          # verify the environment
+            rolen provider detect --register
+            rolen                        # launch the TUI
+            rolen gui                    # launch the desktop window
             ```
           files: |
             dist/*.zip

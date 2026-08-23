@@ -35,10 +35,10 @@
 \setlength{\parindent}{0pt}
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small Maestro --- TUI Design}
+\fancyhead[L]{\small RoleN --- TUI Design}
 \fancyhead[R]{\small\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
-\title{\textbf{Maestro --- TUI Design}\\[2pt]
+\title{\textbf{RoleN --- TUI Design}\\[2pt]
 \large Wireframes, interaction flows and settings inventory}
 \author{}
 \date{}
@@ -59,7 +59,7 @@ every \emph{project} and every \emph{session} can open as its own satellite wind
 one glance away (app bar + dashboard ticker).
 
   \item \textbf{Keyboard-first.} Global hotkeys work from any window; every form is tab-navigable.
-  \item \textbf{Same core for TUI and CLI} — the TUI is a view; \texttt{maestro-cli} can do everything.
+  \item \textbf{Same core for TUI and CLI} — the TUI is a view; \texttt{rolen-cli} can do everything.
 \end{itemize}
 \section{2. Global Chrome}
 \begin{center}
@@ -140,7 +140,7 @@ Answering unblocks paused tasks automatically (FR-6.3). "Later" keeps tasks paus
 Chronological ledger stream (filterable by project/provider/type): tickets applied, rule decisions, quota events, migrations, alerts. Export CSV/JSON buttons.
 
 \section{4. Project Window (satellite, one per project)}
-Opened from Projects tab (\texttt{Enter}) or \texttt{maestro project open shop}.
+Opened from Projects tab (\texttt{Enter}) or \texttt{rolen project open shop}.
 
 \begin{center}
 \input{tikz/project-window.tex}
@@ -224,13 +224,13 @@ model discovery.
   \item \textbf{Default rules}: proposed from capabilities (e.g. tool-runner -> ollama local);
 user confirms in the rule editor.
 
-  \item Done -> Mission Control. \texttt{maestro config doctor} summary shown.
+  \item Done -> Mission Control. \texttt{rolen config doctor} summary shown.
 \end{itemize}
 \subsection{7.2 New project}
 \begin{itemize}
   \item \texttt{Ctrl+N} -> wizard: name, dir, stack, git init.
   \item \textbf{Interview} (interrogator role, FR-6): batched forms; answers stream into PRD.json.
-  \item Maestro drafts \textbf{PRD.md} -> user reviews in markdown tab -> approve -> PRD.json compiled.
+  \item RoleN drafts \textbf{PRD.md} -> user reviews in markdown tab -> approve -> PRD.json compiled.
   \item \textbf{AGENTS.md + skill suggestions} generated; user checks which skills to install.
   \item \textbf{Task DAG proposal} shown in the project's tree; user edits/reorders -> \textbf{Run}.
   \item Sessions spawn per rule routing; dashboard shows them; questions may reappear
@@ -301,7 +301,7 @@ Window & Kind & Opened from \\
 \midrule
 Mission Control & main (maximized) & startup \\
 Onboarding wizard & modal & first run / Tools \\
-Project window & satellite & Projects tab, \texttt{maestro project open} \\
+Project window & satellite & Projects tab, \texttt{rolen project open} \\
 Session/Chat window & satellite & dashboard/chat tab, Quick Chat promote \\
 Quick Chat & satellite & \texttt{Ctrl+Q} \\
 Provider window & modal-ish & Providers tab \\

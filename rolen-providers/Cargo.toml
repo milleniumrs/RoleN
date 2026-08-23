@@ -1,0 +1,19 @@
+[package]
+name = "rolen-providers"
+description = "Provider registry, HTTP clients and capability/quota probing (PRD FR-1/FR-4)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rolen-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+[dev-dependencies]
+serde_json.workspace = true

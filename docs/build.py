@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Maestro documentation artefacts.
+"""Build the RoleN documentation artefacts.
 
   docs/TUI-DESIGN.md   --md2latex-->  TUI-DESIGN.tex  --xelatex-->  TUI-DESIGN.pdf
 
