@@ -348,16 +348,11 @@ pub struct LedgerEntry {
     pub id: String,
     pub session_id: String,
     pub provider_id: String,
-    /// All prompt tokens, cache hits included.
-    #[serde(default)]
-    pub tokens_in: u64,
-    /// The subset of `tokens_in` served from the provider's prompt cache.
-    /// Rows written before cached pricing existed read back as 0, which
+    /// Token counts split into the buckets the price list bills. Rows written
+    /// before cache pricing existed read their cache buckets back as 0, which
     /// bills them exactly as they were billed before.
-    #[serde(default)]
-    pub tokens_cached: u64,
-    #[serde(default)]
-    pub tokens_out: u64,
+    #[serde(default, flatten)]
+    pub usage: crate::pricing::Tokens,
     #[serde(default)]
     pub cost: f64,
     #[serde(default)]

@@ -1268,13 +1268,23 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
             let r = providers::test::test_prompt(&id, model.as_deref(), &prompt)?;
             println!("model:    {}", r.model);
             println!("reply:    {}", r.text.trim());
-            if r.tokens_cached > 0 {
-                println!(
-                    "tokens:   {} in ({} from cache) / {} out",
-                    r.tokens_in, r.tokens_cached, r.tokens_out
-                );
+            let mut detail = Vec::new();
+            if r.usage.cache_read > 0 {
+                detail.push(format!("{} cache hits", r.usage.cache_read));
+            }
+            let written = r.usage.cache_write_5m + r.usage.cache_write_1h;
+            if written > 0 {
+                detail.push(format!("{written} cache writes"));
+            }
+            if detail.is_empty() {
+                println!("tokens:   {} in / {} out", r.usage.input, r.usage.output);
             } else {
-                println!("tokens:   {} in / {} out", r.tokens_in, r.tokens_out);
+                println!(
+                    "tokens:   {} in ({}) / {} out",
+                    r.usage.input,
+                    detail.join(", "),
+                    r.usage.output
+                );
             }
             println!("cost:     ${:.6}", r.cost);
             println!("latency:  {} ms", r.latency_ms);

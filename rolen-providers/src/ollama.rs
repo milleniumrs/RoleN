@@ -3,6 +3,7 @@
 
 use crate::chat::{ChatRequest, ChatResponse};
 use crate::error::ProviderError;
+use rolen_core::pricing::Tokens;
 use rolen_core::types::Model;
 use serde_json::{json, Value};
 
@@ -73,17 +74,21 @@ pub fn parse_chat(json: &Value) -> Result<ChatResponse, ProviderError> {
         .as_str()
         .ok_or_else(|| ProviderError::Parse("missing message.content".into()))?
         .to_string();
-    let tokens_in = json["prompt_eval_count"].as_u64().unwrap_or(0);
-    let tokens_out = json["eval_count"].as_u64().unwrap_or(0);
     Ok(ChatResponse {
         text,
-        tokens_in,
-        // Ollama reuses a KV cache but never bills for it and never reports
-        // it, so there is no cached subset to split out.
-        tokens_cached: 0,
-        tokens_out,
+        usage: prompt_tokens(json),
         latency_ms: 0,
     })
+}
+
+/// Ollama reuses a KV cache but never bills for it and never reports it, so
+/// every cache bucket stays empty.
+pub fn prompt_tokens(json: &Value) -> Tokens {
+    Tokens {
+        input: json["prompt_eval_count"].as_u64().unwrap_or(0),
+        output: json["eval_count"].as_u64().unwrap_or(0),
+        ..Default::default()
+    }
 }
 
 /// Pure parser — maps /api/tags entries to the capability matrix (FR-1.4),
@@ -185,9 +190,7 @@ pub fn parse_tools_chat(json: &Value) -> Result<ToolsChatResponse, ProviderError
             StopKind::ToolUse
         },
         tool_calls,
-        tokens_in: json["prompt_eval_count"].as_u64().unwrap_or(0),
-        tokens_cached: 0,
-        tokens_out: json["eval_count"].as_u64().unwrap_or(0),
+        usage: prompt_tokens(json),
         latency_ms: 0,
     })
 }
@@ -205,8 +208,8 @@ mod tests {
         });
         let r = parse_chat(&json).unwrap();
         assert_eq!(r.text, "OK");
-        assert_eq!(r.tokens_in, 26);
-        assert_eq!(r.tokens_out, 5);
+        assert_eq!(r.usage.input, 26);
+        assert_eq!(r.usage.output, 5);
     }
 
     #[test]
@@ -249,6 +252,6 @@ mod tests {
         assert_eq!(r.stop, StopKind::ToolUse);
         assert_eq!(r.tool_calls[0].name, "submit_write");
         assert_eq!(r.tool_calls[0].args["path"], "a.txt");
-        assert_eq!(r.tokens_in, 33);
+        assert_eq!(r.usage.input, 33);
     }
 }
