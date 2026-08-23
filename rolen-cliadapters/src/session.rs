@@ -107,6 +107,22 @@ pub fn run_cli_session(
     session.tokens_out = tokens_out_est;
     session.transcript_path = Some(transcript_path.clone());
     ledger.upsert_session(&session)?;
+
+    // A wrapped CLI reports no usage block, so the cache buckets stay empty
+    // and the token counts are length estimates.
+    let usage = rolen_core::pricing::Tokens {
+        input: tokens_in_est,
+        output: tokens_out_est,
+        ..Default::default()
+    };
+    // Normally 0.0: a CLI agent is a subscription with no per-token rate. It
+    // is only non-zero if the user entered their own estimate for this model,
+    // and it is an estimate twice over, because the tokens are guessed too.
+    let cost = rolen_core::pricing::Pricing::load()
+        .unwrap_or_default()
+        .resolve(provider.ptype, &provider.id, &session.model)
+        .cost(usage);
+
     ledger.record(&LedgerEntry {
         id: format!(
             "le-{}",
@@ -114,14 +130,8 @@ pub fn run_cli_session(
         ),
         session_id: session_id.clone(),
         provider_id: provider.id.clone(),
-        // A wrapped CLI reports no usage block, so the cache buckets stay
-        // empty and the token counts are length estimates.
-        usage: rolen_core::pricing::Tokens {
-            input: tokens_in_est,
-            output: tokens_out_est,
-            ..Default::default()
-        },
-        cost: 0.0,
+        usage,
+        cost,
         latency_ms: None,
         ts: chrono::Utc::now(),
     })?;

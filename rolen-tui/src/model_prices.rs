@@ -7,7 +7,7 @@
 
 use appcui::prelude::*;
 use rolen_core::pricing::{fmt_rate, Price, Pricing, Rates};
-use rolen_core::types::Model;
+use rolen_core::types::{Billing, Model};
 use rolen_providers as providers;
 
 #[derive(ListItem)]
@@ -29,7 +29,7 @@ struct PriceRow {
     // Not columns: what this row points at.
     provider_id: String,
     model_id: String,
-    metered: bool,
+    billing: Billing,
     manual: bool,
 }
 
@@ -81,13 +81,18 @@ impl ModelPrices {
         let pricing = Pricing::load().unwrap_or_default();
 
         let mut rows = Vec::new();
-        let (mut free, mut known, mut unknown) = (0usize, 0usize, 0usize);
+        let (mut free, mut known, mut plan, mut unknown) = (0usize, 0usize, 0usize, 0usize);
+        let mut modelless = 0usize;
         for p in reg.list() {
+            if p.models.is_empty() {
+                modelless += 1;
+            }
             for m in &p.models {
                 let price = pricing.resolve(p.ptype, &p.id, &m.id);
                 match price {
                     Price::Free => free += 1,
-                    Price::Known { .. } => known += 1,
+                    Price::Known(_) => known += 1,
+                    Price::Plan(_) => plan += 1,
                     Price::Unknown => unknown += 1,
                 }
                 rows.push(PriceRow {
@@ -100,7 +105,7 @@ impl ModelPrices {
                     price_out: price.output_label(),
                     provider_id: p.id.clone(),
                     model_id: m.id.clone(),
-                    metered: p.ptype.is_metered(),
+                    billing: p.ptype.billing(),
                     manual: m.manual,
                 });
             }
@@ -111,13 +116,21 @@ impl ModelPrices {
         } else if rows.is_empty() {
             "No models known. Run Providers > Detect, or use Add model for one the API does not list.".to_string()
         } else {
+            let mut line = format!(
+                "{} models — {known} priced, {free} free, {plan} on a plan, {unknown} unknown",
+                rows.len()
+            );
+            if modelless > 0 {
+                // Wrapped CLI agents have no /models endpoint, so they show up
+                // here as nothing at all until a model is added by hand.
+                line.push_str(&format!(
+                    "  ({modelless} providers list no models — use Add model)"
+                ));
+            }
             let path = rolen_core::config::pricing_file()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "pricing.toml".into());
-            format!(
-                "{} models — {known} priced, {free} free, {unknown} unknown\nPrices are stored in {path}",
-                rows.len()
-            )
+            format!("{line}\nPrices are stored in {path}")
         };
 
         let h = self.l_info;
@@ -135,30 +148,40 @@ impl ModelPrices {
 
     /// The row under the cursor, as owned data: the list view borrow has to be
     /// released before anything can open a dialog or write to disk.
-    fn selection(&self) -> Option<(String, String, bool, bool)> {
+    fn selection(&self) -> Option<(String, String, Billing, bool)> {
         self.control(self.lv)
             .and_then(|lv| lv.current_item())
             .map(|r| {
                 (
                     r.provider_id.clone(),
                     r.model_id.clone(),
-                    r.metered,
+                    r.billing,
                     r.manual,
                 )
             })
     }
 
     fn edit_selected(&mut self) {
-        let Some((provider_id, model_id, metered, _)) = self.selection() else {
+        let Some((provider_id, model_id, billing, _)) = self.selection() else {
             return;
         };
-        if !metered {
+        if billing == Billing::Free {
             dialogs::message(
                 "Model price",
                 &format!(
                     "'{model_id}' runs on hardware you already pay for, so there is no per-token price to set.\n\nIt is reported as free."
                 ),
             );
+            return;
+        }
+        if billing == Billing::Subscription
+            && !dialogs::proceed(
+                "Model price",
+                &format!(
+                    "'{provider_id}' is billed by subscription. It publishes no per-token rate, so anything entered here is your own estimate for budgeting — RoleN will show it with a ~ and bill against it.\n\nWhat actually limits this provider is its allowance, not the price of a call.\n\nEnter an estimate anyway?"
+                ),
+            )
+        {
             return;
         }
 
@@ -261,10 +284,10 @@ impl ModelPrices {
     }
 
     fn clear_selected(&mut self) {
-        let Some((provider_id, model_id, metered, _)) = self.selection() else {
+        let Some((provider_id, model_id, billing, _)) = self.selection() else {
             return;
         };
-        if !metered {
+        if billing == Billing::Free {
             return;
         }
         let mut pricing = Pricing::load().unwrap_or_default();
