@@ -15,17 +15,19 @@ fn vault_file() -> Result<PathBuf, CoreError> {
     Ok(config::config_dir()?.join("vault.age"))
 }
 
+fn raw_password() -> Option<String> {
+    std::env::var(PASSWORD_ENV).ok().filter(|pw| !pw.is_empty())
+}
+
 fn password() -> Result<age::secrecy::SecretString, CoreError> {
-    match std::env::var(PASSWORD_ENV) {
-        Ok(pw) if !pw.is_empty() => Ok(age::secrecy::SecretString::new(pw)),
-        _ => Err(CoreError::VaultLocked),
+    match raw_password() {
+        Some(pw) => Ok(age::secrecy::SecretString::new(pw)),
+        None => Err(CoreError::VaultLocked),
     }
 }
 
 pub fn is_available() -> bool {
-    std::env::var(PASSWORD_ENV)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
+    raw_password().is_some()
 }
 
 /// Decrypt a vault blob with an explicit passphrase (pure — unit-tested).
