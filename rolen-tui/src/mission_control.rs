@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::add_provider::AddProviderDialog;
-use crate::{provider_detail, quick_chat, settings, theme, transcript_view};
+use crate::{model_prices, provider_detail, quick_chat, settings, theme, transcript_view};
 
 #[derive(ListItem)]
 struct ProviderRow {
@@ -122,7 +122,7 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
     conector.notify(CliTaskMsg::Finished(msg));
 }
 
-#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+ThemePaper+ThemeSky+ThemeMint+ThemeSand+Doctor+About+Exit)]
+#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+ModelPrices+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+ThemePaper+ThemeSky+ThemeMint+ThemeSand+Doctor+About+Exit)]
 pub struct MissionControl {
     // menus (app bar, left side)
     m_file: Handle<MenuButton>,
@@ -230,7 +230,9 @@ impl MissionControl {
                 "class: MissionControl, items=[
                 {'&Add Provider', cmd:AddProvider},
                 {'&Detect CLIs && Ollama', cmd:DetectClis},
-                {'&Health Check All', cmd:HealthCheck}
+                {'&Health Check All', cmd:HealthCheck},
+                {-},
+                {'Model &Prices', cmd:ModelPrices}
             ]"
             ),
             2,
@@ -1054,6 +1056,11 @@ impl MenuEvents for MissionControl {
             AddProvider => self.add_provider(),
             DetectClis => self.detect(),
             HealthCheck => self.health_check(),
+            ModelPrices => {
+                model_prices::ModelPrices::new().show();
+                // prices feed the cost column, so the dashboard is now stale
+                self.refresh_today();
+            }
             BuildProject => self.build_project(),
             NewRule => self.not_yet("visual rule editor (M6) — use `rolen rule add` meanwhile"),
             DryRun => self.dry_run_rule(),

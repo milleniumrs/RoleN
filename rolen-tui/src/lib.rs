@@ -2,6 +2,7 @@
 
 mod add_provider;
 mod mission_control;
+mod model_prices;
 mod new_project;
 mod provider_detail;
 mod quick_chat;
