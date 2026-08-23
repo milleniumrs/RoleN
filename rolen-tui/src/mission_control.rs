@@ -1036,9 +1036,15 @@ impl MenuEvents for MissionControl {
         use missioncontrol::Commands::*;
         match command {
             Exit => self.close(),
+            // Read from the crate metadata: a hardcoded string here silently
+            // went stale for a whole release cycle.
             About => dialogs::message(
                 "About RoleN",
-                "RoleN v0.1.0\nA conductor for LLM-powered development.\nMIT License",
+                concat!(
+                    "RoleN v",
+                    env!("CARGO_PKG_VERSION"),
+                    "\nA conductor for LLM-powered development.\nMIT License"
+                ),
             ),
             Doctor => self.run_doctor(),
             NewProject => self.new_project(),
