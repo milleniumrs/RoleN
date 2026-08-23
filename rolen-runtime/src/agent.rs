@@ -257,13 +257,7 @@ pub fn run(
         };
 
         // ledger every call (FR-4.1/FR-4.6)
-        let cost = providers::test::estimate_cost(
-            &provider,
-            &model,
-            resp.tokens_in,
-            resp.tokens_cached,
-            resp.tokens_out,
-        );
+        let cost = providers::test::estimate_cost(&provider, &model, resp.usage);
         let _ = ledger.record(&rolen_core::types::LedgerEntry {
             id: format!(
                 "le-{}",
@@ -271,15 +265,13 @@ pub fn run(
             ),
             session_id: session_id.clone(),
             provider_id: provider_id.clone(),
-            tokens_in: resp.tokens_in,
-            tokens_cached: resp.tokens_cached,
-            tokens_out: resp.tokens_out,
+            usage: resp.usage,
             cost,
             latency_ms: Some(resp.latency_ms),
             ts: chrono::Utc::now(),
         });
-        session.tokens_in += resp.tokens_in;
-        session.tokens_out += resp.tokens_out;
+        session.tokens_in += resp.usage.input;
+        session.tokens_out += resp.usage.output;
         session.cost += cost;
         let _ = ledger.upsert_session(&session);
 

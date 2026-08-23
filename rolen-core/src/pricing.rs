@@ -17,20 +17,109 @@ use crate::types::ProviderType;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
+/// The token counts of one call, split the way the price list bills them.
+///
+/// `input` is every prompt token. The three cache figures are *subsets* of it,
+/// not extras; whatever is left over is fresh input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tokens {
+    pub input: u64,
+    /// Served from cache, billed at the cheap hit rate.
+    pub cache_read: u64,
+    /// Written into a short-lived cache, billed at a premium.
+    pub cache_write_5m: u64,
+    /// Written into a long-lived cache, billed at a larger premium.
+    pub cache_write_1h: u64,
+    pub output: u64,
+}
+
+impl Tokens {
+    /// Prompt tokens that were neither read from nor written to the cache.
+    ///
+    /// Clamped, because a provider is free to report counts that do not add
+    /// up and a negative here would turn into a credit.
+    pub fn fresh_input(self) -> u64 {
+        self.input
+            .saturating_sub(self.cache_read)
+            .saturating_sub(self.cache_write_5m)
+            .saturating_sub(self.cache_write_1h)
+    }
+}
+
+/// What one model costs, per million tokens.
+///
+/// Only input and output are required. Every cache rate is optional and falls
+/// back to the input rate, because most providers have no separate cache
+/// pricing and RoleN does not invent multipliers.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rates {
+    /// USD per million fresh (uncached) input tokens.
+    pub input: f64,
+    /// USD per million output (completion) tokens.
+    pub output: f64,
+    /// USD per million input tokens served from the provider's prompt cache.
+    pub cache_read: Option<f64>,
+    /// USD per million tokens written to a short-lived (5-minute) cache.
+    /// Anthropic charges 1.25x input for this.
+    pub cache_write_5m: Option<f64>,
+    /// USD per million tokens written to a long-lived (1-hour) cache.
+    /// Anthropic charges 2x input for this.
+    pub cache_write_1h: Option<f64>,
+}
+
+impl Rates {
+    /// The simple case: no cache pricing, so every prompt token costs the
+    /// same whatever the cache did.
+    pub fn flat(input: f64, output: f64) -> Self {
+        Self {
+            input,
+            output,
+            ..Default::default()
+        }
+    }
+
+    fn read_rate(self) -> f64 {
+        self.cache_read.unwrap_or(self.input)
+    }
+
+    fn write_5m_rate(self) -> f64 {
+        self.cache_write_5m.unwrap_or(self.input)
+    }
+
+    fn write_1h_rate(self) -> f64 {
+        self.cache_write_1h.unwrap_or(self.input)
+    }
+}
+
 /// A rate somebody entered for one model of one provider.
+///
+/// Kept flat rather than nesting [`Rates`] so `pricing.toml` stays pleasant to
+/// edit by hand.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelPrice {
     pub provider_id: String,
     pub model_id: String,
-    /// USD per million fresh (uncached) input tokens.
     pub in_per_mtok: f64,
-    /// USD per million output (completion) tokens.
     pub out_per_mtok: f64,
-    /// USD per million input tokens served from the provider's prompt cache.
-    /// `None` means the provider does not price cache hits separately, so
-    /// they are billed at `in_per_mtok`.
     #[serde(default)]
     pub cached_in_per_mtok: Option<f64>,
+    #[serde(default)]
+    pub cache_write_5m_per_mtok: Option<f64>,
+    #[serde(default)]
+    pub cache_write_1h_per_mtok: Option<f64>,
+}
+
+impl ModelPrice {
+    pub fn rates(&self) -> Rates {
+        Rates {
+            input: self.in_per_mtok,
+            output: self.out_per_mtok,
+            cache_read: self.cached_in_per_mtok,
+            cache_write_5m: self.cache_write_5m_per_mtok,
+            cache_write_1h: self.cache_write_1h_per_mtok,
+        }
+    }
 }
 
 /// What RoleN can honestly say about one model's price.
@@ -38,12 +127,8 @@ pub struct ModelPrice {
 pub enum Price {
     /// Runs on hardware you already pay for; there is no per-token charge.
     Free,
-    /// Metered, and a rate has been entered.
-    Known {
-        in_per_mtok: f64,
-        out_per_mtok: f64,
-        cached_in_per_mtok: Option<f64>,
-    },
+    /// Metered, and rates have been entered.
+    Known(Rates),
     /// Metered, but nobody has told RoleN the rate. Cost is not estimated.
     Unknown,
 }
@@ -51,47 +136,21 @@ pub enum Price {
 impl Price {
     /// USD for a call of this size.
     ///
-    /// `tokens_in` is every prompt token; `tokens_cached` is the subset that
-    /// was a cache hit, and is billed at the cached rate instead of the input
-    /// rate. [`Price::Unknown`] deliberately yields 0.0: guessing a rate would
-    /// put invented money in the ledger.
-    pub fn cost(self, tokens_in: u64, tokens_cached: u64, tokens_out: u64) -> f64 {
+    /// Each bucket of [`Tokens`] is billed at its own rate, with every cache
+    /// rate falling back to the input rate when it was not entered.
+    /// [`Price::Unknown`] deliberately yields 0.0: guessing a rate would put
+    /// invented money in the ledger.
+    pub fn cost(self, t: Tokens) -> f64 {
         match self {
             Price::Free | Price::Unknown => 0.0,
-            Price::Known {
-                in_per_mtok,
-                out_per_mtok,
-                cached_in_per_mtok,
-            } => {
-                // A provider that reports more cache hits than prompt tokens
-                // would otherwise bill negative fresh input.
-                let cached = tokens_cached.min(tokens_in);
-                let fresh = tokens_in - cached;
-                let cached_rate = cached_in_per_mtok.unwrap_or(in_per_mtok);
-                (fresh as f64 * in_per_mtok
-                    + cached as f64 * cached_rate
-                    + tokens_out as f64 * out_per_mtok)
+            Price::Known(r) => {
+                (t.fresh_input() as f64 * r.input
+                    + t.cache_read.min(t.input) as f64 * r.read_rate()
+                    + t.cache_write_5m.min(t.input) as f64 * r.write_5m_rate()
+                    + t.cache_write_1h.min(t.input) as f64 * r.write_1h_rate()
+                    + t.output as f64 * r.output)
                     / 1_000_000.0
             }
-        }
-    }
-
-    /// The cached-input rate as shown in the price grid: "free" for unmetered
-    /// providers, "unknown" when no rate is entered, and otherwise either the
-    /// explicit cached rate or the input rate it falls back to.
-    pub fn cached_label(self) -> String {
-        match self {
-            Price::Free => "free".to_string(),
-            Price::Unknown => "unknown".to_string(),
-            Price::Known {
-                in_per_mtok,
-                cached_in_per_mtok,
-                ..
-            } => match cached_in_per_mtok {
-                Some(v) => format!("${}", fmt_rate(v)),
-                // Not "unknown": it is known, it is just the same as input.
-                None => format!("${}", fmt_rate(in_per_mtok)),
-            },
         }
     }
 
@@ -101,22 +160,38 @@ impl Price {
     }
 
     pub fn input_label(self) -> String {
-        self.label(|p| p.0)
+        self.label(|r| r.input)
     }
 
     pub fn output_label(self) -> String {
-        self.label(|p| p.1)
+        self.label(|r| r.output)
     }
 
-    fn label(self, pick: fn((f64, f64)) -> f64) -> String {
+    /// The cached-hit rate. A model with no explicit cached rate shows the
+    /// input rate it falls back to — that is known, not unknown.
+    pub fn cached_label(self) -> String {
+        self.label(|r| r.read_rate())
+    }
+
+    /// The two cache-write rates as one cell, "6.25/10.00" style, since they
+    /// are only ever interesting next to each other.
+    pub fn cache_write_label(self) -> String {
         match self {
             Price::Free => "free".to_string(),
             Price::Unknown => "unknown".to_string(),
-            Price::Known {
-                in_per_mtok,
-                out_per_mtok,
-                ..
-            } => format!("${}", fmt_rate(pick((in_per_mtok, out_per_mtok)))),
+            Price::Known(r) => format!(
+                "{}/{}",
+                fmt_rate(r.write_5m_rate()),
+                fmt_rate(r.write_1h_rate())
+            ),
+        }
+    }
+
+    fn label(self, pick: fn(Rates) -> f64) -> String {
+        match self {
+            Price::Free => "free".to_string(),
+            Price::Unknown => "unknown".to_string(),
+            Price::Known(r) => format!("${}", fmt_rate(pick(r))),
         }
     }
 }
@@ -181,32 +256,29 @@ impl Pricing {
             .find(|e| e.provider_id == provider_id && e.model_id == model_id)
     }
 
-    /// Insert or overwrite the rates for one model. `cached_in_per_mtok` of
-    /// `None` means cache hits are billed at the input rate.
-    pub fn set(
-        &mut self,
-        provider_id: &str,
-        model_id: &str,
-        in_per_mtok: f64,
-        out_per_mtok: f64,
-        cached_in_per_mtok: Option<f64>,
-    ) {
+    /// Insert or overwrite the rates for one model. Any cache rate left as
+    /// `None` is billed at the input rate.
+    pub fn set(&mut self, provider_id: &str, model_id: &str, r: Rates) {
         match self
             .entries
             .iter_mut()
             .find(|e| e.provider_id == provider_id && e.model_id == model_id)
         {
             Some(e) => {
-                e.in_per_mtok = in_per_mtok;
-                e.out_per_mtok = out_per_mtok;
-                e.cached_in_per_mtok = cached_in_per_mtok;
+                e.in_per_mtok = r.input;
+                e.out_per_mtok = r.output;
+                e.cached_in_per_mtok = r.cache_read;
+                e.cache_write_5m_per_mtok = r.cache_write_5m;
+                e.cache_write_1h_per_mtok = r.cache_write_1h;
             }
             None => self.entries.push(ModelPrice {
                 provider_id: provider_id.to_string(),
                 model_id: model_id.to_string(),
-                in_per_mtok,
-                out_per_mtok,
-                cached_in_per_mtok,
+                in_per_mtok: r.input,
+                out_per_mtok: r.output,
+                cached_in_per_mtok: r.cache_read,
+                cache_write_5m_per_mtok: r.cache_write_5m,
+                cache_write_1h_per_mtok: r.cache_write_1h,
             }),
         }
     }
@@ -229,11 +301,7 @@ impl Pricing {
             return Price::Free;
         }
         match self.get(provider_id, model_id) {
-            Some(e) => Price::Known {
-                in_per_mtok: e.in_per_mtok,
-                out_per_mtok: e.out_per_mtok,
-                cached_in_per_mtok: e.cached_in_per_mtok,
-            },
+            Some(e) => Price::Known(e.rates()),
             None => Price::Unknown,
         }
     }
@@ -280,7 +348,7 @@ mod tests {
     #[test]
     fn a_rate_on_an_unmetered_provider_stays_free() {
         let mut p = Pricing::default();
-        p.set("ollama-local", "qwen3:30b", 99.0, 99.0, Some(99.0));
+        p.set("ollama-local", "qwen3:30b", Rates::flat(99.0, 99.0));
         assert_eq!(
             p.resolve(ProviderType::OllamaLocal, "ollama-local", "qwen3:30b"),
             Price::Free
@@ -290,22 +358,18 @@ mod tests {
     #[test]
     fn set_then_resolve_returns_the_rate() {
         let mut p = Pricing::default();
-        p.set("kimi", "kimi-for-coding", 3.0, 15.0, Some(0.30));
+        p.set("kimi", "kimi-for-coding", k3_rates());
         assert_eq!(
             p.resolve(ProviderType::Api, "kimi", "kimi-for-coding"),
-            Price::Known {
-                in_per_mtok: 3.0,
-                out_per_mtok: 15.0,
-                cached_in_per_mtok: Some(0.30)
-            }
+            Price::Known(k3_rates())
         );
     }
 
     #[test]
     fn set_overwrites_rather_than_duplicating() {
         let mut p = Pricing::default();
-        p.set("kimi", "k2", 3.0, 15.0, Some(0.30));
-        p.set("kimi", "k2", 1.0, 2.0, None);
+        p.set("kimi", "k2", k3_rates());
+        p.set("kimi", "k2", Rates::flat(1.0, 2.0));
         assert_eq!(p.len(), 1);
         assert_eq!(p.get("kimi", "k2").unwrap().in_per_mtok, 1.0);
         // the cached rate is part of the overwrite, not merged with the old one
@@ -315,7 +379,7 @@ mod tests {
     #[test]
     fn prices_are_scoped_to_one_provider() {
         let mut p = Pricing::default();
-        p.set("kimi", "shared-name", 3.0, 15.0, None);
+        p.set("kimi", "shared-name", Rates::flat(3.0, 15.0));
         assert_eq!(
             p.resolve(ProviderType::Api, "other", "shared-name"),
             Price::Unknown
@@ -325,27 +389,51 @@ mod tests {
     #[test]
     fn clear_reports_whether_it_removed_anything() {
         let mut p = Pricing::default();
-        p.set("kimi", "k2", 3.0, 15.0, None);
+        p.set("kimi", "k2", Rates::flat(3.0, 15.0));
         assert!(p.clear("kimi", "k2"));
         assert!(!p.clear("kimi", "k2"));
         assert!(p.is_empty());
     }
 
-    /// The rates on a Kimi K3 subscription page.
+    /// The rates on a Kimi K3 subscription page: no separate cache-write
+    /// pricing, so writes fall back to the input rate.
+    fn k3_rates() -> Rates {
+        Rates {
+            input: 3.00,
+            output: 15.00,
+            cache_read: Some(0.30),
+            ..Default::default()
+        }
+    }
+
     fn k3() -> Price {
-        Price::Known {
-            in_per_mtok: 3.00,
-            out_per_mtok: 15.00,
-            cached_in_per_mtok: Some(0.30),
+        Price::Known(k3_rates())
+    }
+
+    /// Claude Opus 5: $5 in, $25 out, $0.50 hit, $6.25 5m write, $10 1h write.
+    fn opus5() -> Price {
+        Price::Known(Rates {
+            input: 5.00,
+            output: 25.00,
+            cache_read: Some(0.50),
+            cache_write_5m: Some(6.25),
+            cache_write_1h: Some(10.00),
+        })
+    }
+
+    fn prompt(input: u64, output: u64) -> Tokens {
+        Tokens {
+            input,
+            output,
+            ..Default::default()
         }
     }
 
     #[test]
     fn cost_is_per_million_tokens() {
-        let price = k3();
-        assert_eq!(price.cost(1_000_000, 0, 0), 3.0);
-        assert_eq!(price.cost(0, 0, 1_000_000), 15.0);
-        assert_eq!(price.cost(500_000, 0, 100_000), 1.5 + 1.5);
+        assert_eq!(k3().cost(prompt(1_000_000, 0)), 3.0);
+        assert_eq!(k3().cost(prompt(0, 1_000_000)), 15.0);
+        assert_eq!(k3().cost(prompt(500_000, 100_000)), 1.5 + 1.5);
     }
 
     #[test]
@@ -354,46 +442,128 @@ mod tests {
         //   200k fresh  @ $3.00  = $0.60
         //   800k cached @ $0.30  = $0.24
         //   100k out    @ $15.00 = $1.50
-        let cost = k3().cost(1_000_000, 800_000, 100_000);
+        let cost = k3().cost(Tokens {
+            input: 1_000_000,
+            cache_read: 800_000,
+            output: 100_000,
+            ..Default::default()
+        });
         assert!((cost - 2.34).abs() < 1e-9, "got {cost}");
     }
 
     #[test]
+    fn cache_writes_bill_above_the_input_rate() {
+        // Opus 5: 1M tokens all written to a 1h cache is $10, double the $5
+        // input rate. Billing writes as plain input would say $5.
+        let w1h = opus5().cost(Tokens {
+            input: 1_000_000,
+            cache_write_1h: 1_000_000,
+            ..Default::default()
+        });
+        assert_eq!(w1h, 10.0);
+
+        let w5m = opus5().cost(Tokens {
+            input: 1_000_000,
+            cache_write_5m: 1_000_000,
+            ..Default::default()
+        });
+        assert_eq!(w5m, 6.25);
+
+        assert!(w5m > opus5().cost(prompt(1_000_000, 0)));
+    }
+
+    #[test]
+    fn a_realistic_opus_turn_bills_every_bucket_at_its_own_rate() {
+        //   100k fresh   @ $5.00  = $0.50
+        //   500k hits    @ $0.50  = $0.25
+        //   300k 5m writ @ $6.25  = $1.875
+        //   100k 1h writ @ $10.00 = $1.00
+        //    20k out     @ $25.00 = $0.50
+        let cost = opus5().cost(Tokens {
+            input: 1_000_000,
+            cache_read: 500_000,
+            cache_write_5m: 300_000,
+            cache_write_1h: 100_000,
+            output: 20_000,
+        });
+        assert!((cost - 4.125).abs() < 1e-9, "got {cost}");
+    }
+
+    #[test]
+    fn fresh_input_is_whatever_the_cache_buckets_did_not_claim() {
+        let t = Tokens {
+            input: 1_000,
+            cache_read: 400,
+            cache_write_5m: 300,
+            cache_write_1h: 100,
+            output: 0,
+        };
+        assert_eq!(t.fresh_input(), 200);
+    }
+
+    #[test]
     fn a_fully_cached_prompt_costs_the_cached_rate_only() {
-        assert_eq!(k3().cost(1_000_000, 1_000_000, 0), 0.30);
+        assert_eq!(
+            k3().cost(Tokens {
+                input: 1_000_000,
+                cache_read: 1_000_000,
+                ..Default::default()
+            }),
+            0.30
+        );
     }
 
     #[test]
     fn cached_tokens_are_a_subset_not_an_extra() {
         // Billing must never exceed the no-cache price for the same prompt.
-        let no_cache = k3().cost(1_000_000, 0, 0);
-        let cached = k3().cost(1_000_000, 400_000, 0);
+        let no_cache = k3().cost(prompt(1_000_000, 0));
+        let cached = k3().cost(Tokens {
+            input: 1_000_000,
+            cache_read: 400_000,
+            ..Default::default()
+        });
         assert!(cached < no_cache);
     }
 
     #[test]
-    fn an_overreported_cache_count_cannot_bill_negative_input() {
-        // A provider claiming more cache hits than prompt tokens must not
+    fn overreported_cache_counts_cannot_bill_negative_input() {
+        // A provider whose buckets exceed its own prompt total must not
         // produce a credit.
-        let cost = k3().cost(1_000, 10_000, 0);
-        assert!(cost > 0.0);
-        assert_eq!(cost, k3().cost(1_000, 1_000, 0));
+        let t = Tokens {
+            input: 1_000,
+            cache_read: 10_000,
+            cache_write_5m: 10_000,
+            cache_write_1h: 10_000,
+            output: 0,
+        };
+        assert_eq!(t.fresh_input(), 0);
+        assert!(opus5().cost(t) > 0.0);
     }
 
     #[test]
-    fn without_a_cached_rate_hits_bill_as_normal_input() {
-        let p = Price::Known {
-            in_per_mtok: 3.0,
-            out_per_mtok: 15.0,
-            cached_in_per_mtok: None,
-        };
-        assert_eq!(p.cost(1_000_000, 750_000, 0), p.cost(1_000_000, 0, 0));
+    fn without_cache_rates_every_bucket_bills_as_normal_input() {
+        let p = Price::Known(Rates::flat(3.0, 15.0));
+        let mixed = p.cost(Tokens {
+            input: 1_000_000,
+            cache_read: 300_000,
+            cache_write_5m: 300_000,
+            cache_write_1h: 150_000,
+            ..Default::default()
+        });
+        assert_eq!(mixed, p.cost(prompt(1_000_000, 0)));
     }
 
     #[test]
     fn free_and_unknown_both_cost_nothing() {
-        assert_eq!(Price::Free.cost(1_000_000, 500_000, 1_000_000), 0.0);
-        assert_eq!(Price::Unknown.cost(1_000_000, 500_000, 1_000_000), 0.0);
+        let t = Tokens {
+            input: 1_000_000,
+            cache_read: 500_000,
+            cache_write_1h: 100_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(Price::Free.cost(t), 0.0);
+        assert_eq!(Price::Unknown.cost(t), 0.0);
     }
 
     #[test]
@@ -407,26 +577,20 @@ mod tests {
     fn labels_say_free_and_unknown_in_words() {
         assert_eq!(Price::Free.input_label(), "free");
         assert_eq!(Price::Free.cached_label(), "free");
+        assert_eq!(Price::Free.cache_write_label(), "free");
         assert_eq!(Price::Unknown.output_label(), "unknown");
         assert_eq!(Price::Unknown.cached_label(), "unknown");
-        let k = Price::Known {
-            in_per_mtok: 3.0,
-            out_per_mtok: 0.075,
-            cached_in_per_mtok: Some(0.30),
-        };
-        assert_eq!(k.input_label(), "$3.00");
-        assert_eq!(k.output_label(), "$0.075");
-        assert_eq!(k.cached_label(), "$0.30");
+        assert_eq!(Price::Unknown.cache_write_label(), "unknown");
+        assert_eq!(opus5().input_label(), "$5.00");
+        assert_eq!(opus5().output_label(), "$25.00");
+        assert_eq!(opus5().cached_label(), "$0.50");
+        assert_eq!(opus5().cache_write_label(), "6.25/10.00");
     }
 
     #[test]
-    fn no_cached_rate_shows_the_input_rate_it_falls_back_to() {
-        let k = Price::Known {
-            in_per_mtok: 3.0,
-            out_per_mtok: 15.0,
-            cached_in_per_mtok: None,
-        };
-        assert_eq!(k.cached_label(), "$3.00");
+    fn missing_rates_show_the_input_rate_they_fall_back_to() {
+        assert_eq!(k3().cache_write_label(), "3.00/3.00");
+        assert_eq!(Price::Known(Rates::flat(3.0, 15.0)).cached_label(), "$3.00");
     }
 
     #[test]
@@ -442,14 +606,38 @@ mod tests {
     #[test]
     fn the_file_round_trips() {
         let mut p = Pricing::default();
-        p.set("kimi", "k2", 3.0, 15.0, Some(0.19));
-        p.set("openai", "gpt-4o", 2.5, 10.0, None);
+        p.set("kimi", "k2", k3_rates());
+        p.set("openai", "gpt-4o", Rates::flat(2.5, 10.0));
         let text = toml::to_string_pretty(&PricingFile {
             prices: p.entries.clone(),
         })
         .unwrap();
         let back: PricingFile = toml::from_str(&text).unwrap();
         assert_eq!(back.prices, p.entries);
+    }
+
+    #[test]
+    fn a_hand_written_file_with_every_rate_loads() {
+        // Exactly the shape written into pricing.toml by hand, so a typo in
+        // the field names shows up here rather than as a silently ignored
+        // rate that bills at the input price.
+        let text = r#"
+[[prices]]
+provider_id = "claude-sub"
+model_id = "claude-opus-5"
+in_per_mtok = 5.0
+out_per_mtok = 25.0
+cached_in_per_mtok = 0.5
+cache_write_5m_per_mtok = 6.25
+cache_write_1h_per_mtok = 10.0
+"#;
+        let back: PricingFile = toml::from_str(text).unwrap();
+        let r = back.prices[0].rates();
+        assert_eq!(r.input, 5.0);
+        assert_eq!(r.output, 25.0);
+        assert_eq!(r.cache_read, Some(0.5));
+        assert_eq!(r.cache_write_5m, Some(6.25));
+        assert_eq!(r.cache_write_1h, Some(10.0));
     }
 
     #[test]

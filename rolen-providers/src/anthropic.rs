@@ -2,6 +2,7 @@
 
 use crate::chat::{ChatRequest, ChatResponse};
 use crate::error::ProviderError;
+use rolen_core::pricing::Tokens;
 use rolen_core::types::Model;
 use serde_json::{json, Value};
 
@@ -102,34 +103,48 @@ pub fn parse_message(json: &Value) -> Result<ChatResponse, ProviderError> {
     if text.is_empty() {
         return Err(ProviderError::Parse("no text block in content[]".into()));
     }
-    let (tokens_in, tokens_cached) = prompt_tokens(json);
-    let tokens_out = json["usage"]["output_tokens"].as_u64().unwrap_or(0);
     Ok(ChatResponse {
         text,
-        tokens_in,
-        tokens_cached,
-        tokens_out,
+        usage: prompt_tokens(json),
         latency_ms: 0,
     })
 }
 
-/// Total prompt tokens and the cached subset.
+/// Prompt-token counts, split into the buckets the price list bills.
 ///
 /// Anthropic reports these differently to everyone else: `input_tokens`
 /// *excludes* cache traffic, which arrives as separate `cache_read_input_tokens`
 /// and `cache_creation_input_tokens` counters. RoleN's convention is that
-/// `tokens_in` is everything, so the three are summed here.
+/// `input` is everything, so the three are summed here.
 ///
-/// Cache *creation* is folded into fresh input rather than the cached subset:
-/// Anthropic charges a premium for writing the cache, so billing it at the
-/// cheap cached rate would understate the cost. Billing it at the normal input
-/// rate is the closer of the two available answers.
-pub fn prompt_tokens(json: &Value) -> (u64, u64) {
+/// Cache *writes* cost more than fresh input — 1.25x at the 5-minute TTL and
+/// 2x at the 1-hour TTL — so they get their own buckets rather than being
+/// folded into either fresh input or the cheap cached bucket. Recent API
+/// versions break the total down under `cache_creation`; when only the flat
+/// `cache_creation_input_tokens` is present the whole lot is treated as
+/// 5-minute, that being the default TTL.
+pub fn prompt_tokens(json: &Value) -> Tokens {
     let usage = &json["usage"];
     let fresh = usage["input_tokens"].as_u64().unwrap_or(0);
-    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
-    let written = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-    (fresh + cached + written, cached)
+    let cache_read = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    let written_total = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+
+    let breakdown = &usage["cache_creation"];
+    let (cache_write_5m, cache_write_1h) = match (
+        breakdown["ephemeral_5m_input_tokens"].as_u64(),
+        breakdown["ephemeral_1h_input_tokens"].as_u64(),
+    ) {
+        (None, None) => (written_total, 0),
+        (a, b) => (a.unwrap_or(0), b.unwrap_or(0)),
+    };
+
+    Tokens {
+        input: fresh + cache_read + cache_write_5m + cache_write_1h,
+        cache_read,
+        cache_write_5m,
+        cache_write_1h,
+        output: usage["output_tokens"].as_u64().unwrap_or(0),
+    }
 }
 
 /// Pure parser — unit-tested without network.
@@ -281,13 +296,10 @@ pub fn parse_tools_response(json: &Value) -> Result<ToolsChatResponse, ProviderE
             }
         }
     };
-    let (tokens_in, tokens_cached) = prompt_tokens(json);
     Ok(ToolsChatResponse {
         text,
         tool_calls,
-        tokens_in,
-        tokens_cached,
-        tokens_out: json["usage"]["output_tokens"].as_u64().unwrap_or(0),
+        usage: prompt_tokens(json),
         latency_ms: 0,
         stop,
     })
@@ -308,9 +320,9 @@ mod tests {
         });
         let r = parse_message(&json).unwrap();
         assert_eq!(r.text, "OK");
-        assert_eq!(r.tokens_in, 20);
-        assert_eq!(r.tokens_out, 4);
-        assert_eq!(r.tokens_cached, 0);
+        assert_eq!(r.usage.input, 20);
+        assert_eq!(r.usage.output, 4);
+        assert_eq!(r.usage.cache_read, 0);
     }
 
     #[test]
@@ -326,14 +338,14 @@ mod tests {
             }
         });
         let r = parse_message(&json).unwrap();
-        assert_eq!(r.tokens_in, 1000);
-        assert_eq!(r.tokens_cached, 800);
+        assert_eq!(r.usage.input, 1000);
+        assert_eq!(r.usage.cache_read, 800);
     }
 
     #[test]
-    fn cache_creation_bills_as_fresh_input_not_as_a_hit() {
+    fn cache_writes_get_their_own_bucket_not_the_cheap_one() {
         // Writing the cache costs more than reading it, so it must not land
-        // in the cheap cached bucket.
+        // in the cached bucket - nor in fresh input, which is cheaper still.
         let json = json!({
             "usage": {
                 "input_tokens": 100,
@@ -341,9 +353,43 @@ mod tests {
                 "cache_read_input_tokens": 500
             }
         });
-        let (total, cached) = prompt_tokens(&json);
-        assert_eq!(total, 1000);
-        assert_eq!(cached, 500);
+        let t = prompt_tokens(&json);
+        assert_eq!(t.input, 1000);
+        assert_eq!(t.cache_read, 500);
+        // no breakdown given, so the default 5-minute TTL is assumed
+        assert_eq!(t.cache_write_5m, 400);
+        assert_eq!(t.cache_write_1h, 0);
+        assert_eq!(t.fresh_input(), 100);
+    }
+
+    #[test]
+    fn a_cache_creation_breakdown_splits_the_two_ttls() {
+        let json = json!({
+            "usage": {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 400,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 300,
+                    "ephemeral_1h_input_tokens": 100
+                }
+            }
+        });
+        let t = prompt_tokens(&json);
+        assert_eq!(t.cache_write_5m, 300);
+        assert_eq!(t.cache_write_1h, 100);
+        assert_eq!(t.input, 1000);
+        assert_eq!(t.fresh_input(), 100);
+    }
+
+    #[test]
+    fn a_response_without_any_cache_fields_has_empty_buckets() {
+        let t = prompt_tokens(&json!({"usage": {"input_tokens": 50, "output_tokens": 7}}));
+        assert_eq!(t.input, 50);
+        assert_eq!(t.output, 7);
+        assert_eq!(t.cache_read, 0);
+        assert_eq!(t.cache_write_5m, 0);
+        assert_eq!(t.cache_write_1h, 0);
     }
 
     #[test]
@@ -403,6 +449,6 @@ mod tests {
         assert_eq!(r.text, "let me check");
         assert_eq!(r.stop, StopKind::ToolUse);
         assert_eq!(r.tool_calls[0].name, "search");
-        assert_eq!(r.tokens_out, 9);
+        assert_eq!(r.usage.output, 9);
     }
 }

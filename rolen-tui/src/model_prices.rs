@@ -6,23 +6,25 @@
 //! at the wrong model as soon as a column header is clicked.
 
 use appcui::prelude::*;
-use rolen_core::pricing::{fmt_rate, Price, Pricing};
+use rolen_core::pricing::{fmt_rate, Price, Pricing, Rates};
 use rolen_core::types::Model;
 use rolen_providers as providers;
 
 #[derive(ListItem)]
 struct PriceRow {
-    #[Column(name: "&Provider", width: 15)]
+    #[Column(name: "&Provider", width: 12)]
     provider: String,
-    #[Column(name: "&Model", width: 26)]
+    #[Column(name: "&Model", width: 24)]
     model: String,
-    #[Column(name: "Src", width: 7)]
+    #[Column(name: "Src", width: 6)]
     source: String,
-    #[Column(name: "Input", width: 11, align: right)]
+    #[Column(name: "Input", width: 9, align: right)]
     price_in: String,
-    #[Column(name: "Cached", width: 11, align: right)]
+    #[Column(name: "Hit", width: 9, align: right)]
     price_cached: String,
-    #[Column(name: "Output", width: 11, align: right)]
+    #[Column(name: "Wr 5m/1h", width: 12, align: right)]
+    price_write: String,
+    #[Column(name: "Output", width: 9, align: right)]
     price_out: String,
     // Not columns: what this row points at.
     provider_id: String,
@@ -63,7 +65,7 @@ impl ModelPrices {
             "class: PriceRow,l:1,t:2,r:1,b:3,flags: [ScrollBars, SearchBar]"
         ));
         w.add(label!(
-            "'Enter edits a price. Cached is what a prompt-cache hit costs. Local Ollama is free.',l:1,b:2,r:1"
+            "'Enter edits a price. Hit = prompt-cache read; Wr = cache write by TTL. Local Ollama is free.',l:1,b:2,r:1"
         ));
         w.b_edit = w.add(button!("'&Edit',l:2,b:0,w:12"));
         w.b_clear = w.add(button!("'&Clear',l:16,b:0,w:12"));
@@ -94,6 +96,7 @@ impl ModelPrices {
                     source: if m.manual { "manual" } else { "api" }.into(),
                     price_in: price.input_label(),
                     price_cached: price.cached_label(),
+                    price_write: price.cache_write_label(),
                     price_out: price.output_label(),
                     provider_id: p.id.clone(),
                     model_id: m.id.clone(),
@@ -164,6 +167,12 @@ impl ModelPrices {
         let def_in = current.map(|e| fmt_rate(e.in_per_mtok));
         let def_out = current.map(|e| fmt_rate(e.out_per_mtok));
         let def_cached = current.and_then(|e| e.cached_in_per_mtok).map(fmt_rate);
+        let def_w5m = current
+            .and_then(|e| e.cache_write_5m_per_mtok)
+            .map(fmt_rate);
+        let def_w1h = current
+            .and_then(|e| e.cache_write_1h_per_mtok)
+            .map(fmt_rate);
 
         let Some(input) = dialogs::input::<String>(
             "Model price",
@@ -191,6 +200,26 @@ impl ModelPrices {
         ) else {
             return;
         };
+        let Some(write_5m) = dialogs::input::<String>(
+            "Model price",
+            &format!(
+                "{provider_id}/{model_id}\nUSD per 1M tokens written to a 5-minute cache\n(leave empty if writing the cache costs the input rate):"
+            ),
+            def_w5m,
+            None,
+        ) else {
+            return;
+        };
+        let Some(write_1h) = dialogs::input::<String>(
+            "Model price",
+            &format!(
+                "{provider_id}/{model_id}\nUSD per 1M tokens written to a 1-hour cache\n(leave empty if writing the cache costs the input rate):"
+            ),
+            def_w1h,
+            None,
+        ) else {
+            return;
+        };
 
         let rate_in = match parse_rate(&input) {
             Ok(v) => v,
@@ -204,9 +233,27 @@ impl ModelPrices {
             Ok(v) => v,
             Err(e) => return dialogs::error("Model price", &format!("cached rate: {e}")),
         };
+        let rate_w5m = match parse_optional_rate(&write_5m) {
+            Ok(v) => v,
+            Err(e) => return dialogs::error("Model price", &format!("5-minute write rate: {e}")),
+        };
+        let rate_w1h = match parse_optional_rate(&write_1h) {
+            Ok(v) => v,
+            Err(e) => return dialogs::error("Model price", &format!("1-hour write rate: {e}")),
+        };
 
         let mut pricing = pricing;
-        pricing.set(&provider_id, &model_id, rate_in, rate_out, rate_cached);
+        pricing.set(
+            &provider_id,
+            &model_id,
+            Rates {
+                input: rate_in,
+                output: rate_out,
+                cache_read: rate_cached,
+                cache_write_5m: rate_w5m,
+                cache_write_1h: rate_w1h,
+            },
+        );
         match pricing.save() {
             Ok(()) => self.refresh(),
             Err(e) => dialogs::error("Model price", &format!("could not save: {e}")),
