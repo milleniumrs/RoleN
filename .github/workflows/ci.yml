@@ -31,8 +31,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux; eframe
-      # adds winit on top, which needs xkbcommon and wayland.
+      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux; the GUI's
+      # winit backend adds xkbcommon and wayland on top.
       #
       # No mesa dev packages: glutin loads GL through dlopen at runtime, so the
       # headers are not needed to build, and libgl1-mesa-dev alone pulled in 19

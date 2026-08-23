@@ -15,27 +15,15 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-# Floor set by egui/eframe 0.36. Declaring it makes cargo's resolver
-# MSRV-aware, so a future `cargo update` cannot silently pull a dependency
-# that needs a newer compiler than the project claims to support.
+# Floor set by the dear-imgui-rs stack (MSRV 1.92). Declaring it makes cargo's
+# resolver MSRV-aware, so a future `cargo update` cannot silently pull a
+# dependency that needs a newer compiler than the project claims to support.
 rust-version = "1.95"
 
 [workspace.dependencies]
 appcui = "=0.4.17"
-# The GUI front-end (route C): egui/eframe, chosen because the whole workspace is
-# synchronous - blocking work goes on a worker thread and the immediate-mode UI
-# redraws from a snapshot, with no async runtime to bridge.
-# accesskit is left out: it is not needed yet and drags extra deps into CI.
-eframe = { version = "0.36", default-features = false, features = [
-    "glow",
-    "default_fonts",
-    "x11",
-    "wayland",
-] }
-egui_extras = "0.36"
 rolen-core = { path = "rolen-core" }
 rolen-tui = { path = "rolen-tui" }
-rolen-gui = { path = "rolen-gui" }
 rolen-providers = { path = "rolen-providers" }
 rolen-runtime = { path = "rolen-runtime" }
 rolen-orchestrator = { path = "rolen-orchestrator" }

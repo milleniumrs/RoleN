@@ -1,6 +1,6 @@
 [package]
 name = "rolen-cli"
-description = "RoleN binary: headless CLI + TUI and GUI launchers (PRD FR-11)"
+description = "RoleN binary: headless CLI + TUI launcher (PRD FR-11)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 rolen-core.workspace = true
 rolen-tui.workspace = true
-rolen-gui.workspace = true
 rolen-providers.workspace = true
 rolen-runtime.workspace = true
 rolen-orchestrator.workspace = true

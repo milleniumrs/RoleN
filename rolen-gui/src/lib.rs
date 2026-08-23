@@ -1,4 +1,4 @@
-//! RoleN's desktop GUI front-end.
+//! RoleN's desktop GUI front-end, built on Dear ImGui (`dear-imgui-rs`).
 //!
 //! A peer of `rolen-tui`, not a replacement: both drive the same UI-free
 //! core. The split that matters here is threading. Every core API is blocking -
@@ -11,6 +11,11 @@
 //!    worker thread and wakes the UI when the result lands.
 //!
 //! The UI thread itself performs no IO.
+//!
+//! This crate is a library plus a thin `main.rs` binary. The binary owns the
+//! winit/glutin/glow shell (window, GL context, event loop); everything that
+//! decides *what* to draw lives here and is testable headless, because
+//! `dear_imgui_rs::Context` can build frames without a window or GPU.
 
 pub mod app;
 pub mod dialogs;
@@ -19,19 +24,6 @@ pub mod menu;
 pub mod state;
 pub mod text;
 pub mod views;
+pub mod wake;
 
-/// Launch the desktop window. Blocks until it closes.
-pub fn run() -> eframe::Result {
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([960.0, 600.0])
-            .with_title("RoleN"),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "RoleN",
-        options,
-        Box::new(|cc| Ok(Box::new(app::RoleNApp::new(cc)))),
-    )
-}
+pub use wake::Wake;

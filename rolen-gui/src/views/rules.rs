@@ -5,139 +5,131 @@
 //! needs live provider state, and therefore the part a static YAML file cannot
 //! answer on its own.
 
-use eframe::egui;
-use egui_extras::{Column, TableBuilder};
+use dear_imgui_rs::{TableFlags, Ui};
 
 use crate::app::RoleNApp;
+use crate::dialogs::{ERROR, OK};
 use crate::jobs::{self, DryRun};
 
-pub fn show(app: &mut RoleNApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut RoleNApp, ui: &Ui) {
     let running = app.jobs.is_running(jobs::DRY_RUN);
 
-    ui.horizontal(|ui| {
-        ui.label("Role");
-        egui::ComboBox::from_id_salt("dry-run-role")
-            .selected_text(app.dry_run_role.clone())
-            .show_ui(ui, |ui| {
-                // Built-in roles plus anything the rule file actually mentions,
-                // so a custom role is still reachable.
-                let mut roles: Vec<String> = rolen_core::rules::BUILT_IN_ROLES
-                    .iter()
-                    .map(|r| r.to_string())
-                    .collect();
-                for rule in &app.snap.rules {
-                    if !roles.contains(&rule.role) {
-                        roles.push(rule.role.clone());
-                    }
-                }
-                for role in roles {
-                    ui.selectable_value(&mut app.dry_run_role, role.clone(), role);
-                }
-            });
+    ui.text("Role");
+    ui.same_line();
+    ui.set_next_item_width(200.0);
+    let preview = app.dry_run_role.clone();
+    if let Some(combo) = ui.begin_combo("##dry-run-role", preview) {
+        // Built-in roles plus anything the rule file actually mentions, so a
+        // custom role is still reachable.
+        let mut roles: Vec<String> = rolen_core::rules::BUILT_IN_ROLES
+            .iter()
+            .map(|r| r.to_string())
+            .collect();
+        for rule in &app.snap.rules {
+            if !roles.contains(&rule.role) {
+                roles.push(rule.role.clone());
+            }
+        }
+        for role in roles {
+            if ui
+                .selectable_config(&role)
+                .selected(app.dry_run_role == role)
+                .build()
+            {
+                app.dry_run_role = role;
+            }
+        }
+        combo.end();
+    }
+    ui.same_line();
 
-        if ui
-            .add_enabled(!running, egui::Button::new("Dry-run"))
-            .on_hover_text(
-                "Health-checks every provider, then evaluates the rules against \
-                 what is actually reachable.",
-            )
-            .clicked()
-        {
+    ui.with_disabled_if(running, || {
+        if ui.button("Dry-run") {
             app.start_dry_run();
         }
-
-        if running {
-            ui.spinner();
-            if ui
-                .button("Cancel")
-                .on_hover_text(
-                    "Stops before the next provider. The request already in flight \
-                     cannot be aborted, so this can still take up to its timeout.",
-                )
-                .clicked()
-            {
-                app.cancel_dry_run();
-            }
-            if let Some(progress) = &app.dry_run_progress {
-                ui.weak(progress);
-            }
-        }
     });
+    if ui.is_item_hovered() {
+        ui.tooltip_text(
+            "Health-checks every provider, then evaluates the rules against \
+             what is actually reachable.",
+        );
+    }
 
-    ui.add_space(8.0);
+    if running {
+        ui.same_line();
+        if ui.button("Cancel") {
+            app.cancel_dry_run();
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text(
+                "Stops before the next provider. The request already in flight \
+                 cannot be aborted, so this can still take up to its timeout.",
+            );
+        }
+        if let Some(progress) = &app.dry_run_progress {
+            ui.same_line();
+            ui.text_disabled(progress);
+        }
+    }
+
+    ui.spacing();
 
     if let Some(outcome) = app.dry_run_result.clone() {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(ui.available_width() - 8.0);
-            outcome_ui(ui, &outcome);
-        });
-        ui.add_space(8.0);
+        outcome_ui(ui, &outcome);
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
     }
 
     if app.snap.rules.is_empty() {
-        ui.weak("No rules yet. Seed them from your providers with: rolen rule init");
+        ui.text_disabled("No rules yet. Seed them from your providers with: rolen rule init");
         return;
     }
 
-    TableBuilder::new(ui)
-        .striped(true)
-        .resizable(true)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(160.0).at_least(100.0))
-        .column(Column::initial(110.0).at_least(80.0))
-        .column(Column::initial(50.0).at_least(40.0))
-        .column(Column::initial(70.0).at_least(50.0))
-        .column(Column::remainder().at_least(180.0))
-        .header(22.0, |mut header| {
-            for title in ["Rule", "Role", "Prio", "Min quota", "Fallback chain"] {
-                header.col(|ui| {
-                    ui.strong(title);
-                });
-            }
-        })
-        .body(|mut body| {
+    ui.table("rules-grid")
+        .flags(TableFlags::RESIZABLE | TableFlags::ROW_BG | TableFlags::BORDERS)
+        .column("Rule")
+        .done()
+        .column("Role")
+        .done()
+        .column("Prio")
+        .done()
+        .column("Min quota")
+        .done()
+        .column("Fallback chain")
+        .done()
+        .headers(true)
+        .build(|ui| {
             for r in &app.snap.rules {
-                body.row(20.0, |mut row| {
-                    row.col(|ui| {
-                        let label = ui.label(&r.id);
-                        if r.conditions > 0 || r.project_scope.is_some() {
-                            label.on_hover_text(format!(
-                                "{} condition(s){}",
-                                r.conditions,
-                                match &r.project_scope {
-                                    Some(s) => format!("; scoped to project '{s}'"),
-                                    None => String::new(),
-                                }
-                            ));
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text(&r.id);
+                if (r.conditions > 0 || r.project_scope.is_some()) && ui.is_item_hovered() {
+                    ui.tooltip_text(format!(
+                        "{} condition(s){}",
+                        r.conditions,
+                        match &r.project_scope {
+                            Some(s) => format!("; scoped to project '{s}'"),
+                            None => String::new(),
                         }
-                    });
-                    row.col(|ui| {
-                        ui.label(&r.role);
-                    });
-                    row.col(|ui| {
-                        ui.label(r.priority.to_string());
-                    });
-                    row.col(|ui| match r.min_quota_pct {
-                        Some(pct) => {
-                            ui.label(format!("{pct}%"));
-                        }
-                        None => {
-                            ui.weak("-");
-                        }
-                    });
-                    row.col(|ui| {
-                        ui.label(r.chain.join("  ->  "));
-                    });
-                });
+                    ));
+                }
+                ui.table_next_column();
+                ui.text(&r.role);
+                ui.table_next_column();
+                ui.text(r.priority.to_string());
+                ui.table_next_column();
+                match r.min_quota_pct {
+                    Some(pct) => ui.text(format!("{pct}%")),
+                    None => ui.text_disabled("-"),
+                }
+                ui.table_next_column();
+                ui.text(r.chain.join("  ->  "));
             }
         });
 }
 
-fn outcome_ui(ui: &mut egui::Ui, outcome: &DryRun) {
-    // Core writes these strings for a terminal; see crate::text. The context is
-    // cloned so the closure does not hold a borrow on `ui`.
-    let fctx = ui.ctx().clone();
-    let fix = |s: &str| crate::text::renderable(&fctx, s);
+fn outcome_ui(ui: &Ui, outcome: &DryRun) {
     match outcome {
         DryRun::Decided {
             role,
@@ -147,34 +139,29 @@ fn outcome_ui(ui: &mut egui::Ui, outcome: &DryRun) {
             explanation,
             skipped,
         } => {
-            ui.horizontal(|ui| {
-                ui.strong(format!("{role} ->"));
-                ui.colored_label(
-                    egui::Color32::from_rgb(0x2e, 0x7d, 0x32),
-                    format!("{provider}/{model}"),
-                );
-                ui.weak(format!("via rule '{rule_id}'"));
-            });
+            ui.text(format!("{role} ->"));
+            ui.same_line();
+            ui.text_colored(OK, format!("{provider}/{model}"));
+            ui.same_line();
+            ui.text_disabled(format!("via rule '{rule_id}'"));
             if !explanation.is_empty() {
-                ui.label(fix(explanation));
+                // Core writes these strings for a terminal; see crate::text.
+                ui.text_wrapped(crate::text::renderable(explanation));
             }
             if !skipped.is_empty() {
-                ui.add_space(4.0);
-                ui.weak("skipped:");
+                ui.spacing();
+                ui.text_disabled("skipped:");
                 for (entry, reason) in skipped {
-                    ui.weak(fix(&format!("    {entry} - {reason}")));
+                    ui.text_disabled(crate::text::renderable(&format!("    {entry} - {reason}")));
                 }
             }
         }
         DryRun::NoRoute { role, reason } => {
-            ui.colored_label(
-                egui::Color32::from_rgb(0xc6, 0x28, 0x28),
-                format!("no route for '{role}'"),
-            );
-            ui.label(fix(reason));
+            ui.text_colored(ERROR, format!("no route for '{role}'"));
+            ui.text_wrapped(crate::text::renderable(reason));
         }
         DryRun::Cancelled => {
-            ui.weak("dry-run cancelled");
+            ui.text_disabled("dry-run cancelled");
         }
     }
 }

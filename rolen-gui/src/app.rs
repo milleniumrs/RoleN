@@ -6,15 +6,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use eframe::egui;
+use dear_imgui_rs::{
+    Condition, Key, KeyChord, KeyMods, ShortcutRoute, ThemePreset, Ui, WindowFlags,
+};
 
 use crate::dialogs::{
-    AddProviderDialog, CliTaskDialog, NewProjectDialog, ProviderRequest, SettingsDialog,
+    self, AddProviderDialog, CliTaskDialog, ModalState, NewProjectDialog, ProviderRequest,
+    SettingsDialog,
 };
 use crate::jobs::{self, CheckRow, DryRun, HealthRow, JobMsg, Jobs};
 use crate::menu::{self, Action};
 use crate::state::{Poller, Snapshot};
 use crate::views;
+use crate::wake::{self, Wake};
 
 /// How often the background poller rebuilds its snapshot. Cheap now that a
 /// single SQLite connection is held open for the life of the thread.
@@ -89,31 +93,33 @@ pub struct RoleNApp {
     pub cli_report: Option<jobs::CliReport>,
     /// `Some` while the doctor report modal is showing.
     doctor: Option<Vec<CheckRow>>,
-    about_open: bool,
+    doctor_modal: ModalState,
+    about_modal: ModalState,
     status: String,
+    /// The colour preset the shell should apply. Owned here because only the
+    /// shell holds `&mut Context`; the draw code can only ask for a change.
+    theme: ThemePreset,
+    theme_dirty: bool,
+    /// Set by `File > Exit`; the shell turns it into an event-loop exit.
+    exit_requested: bool,
 }
 
 impl RoleNApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let ctx = cc.egui_ctx.clone();
-        let poller = Poller::spawn(ctx.clone(), POLL_INTERVAL);
-        Self::with_poller(ctx, poller)
+    pub fn new(wake: Wake) -> Self {
+        let poller = Poller::spawn(wake.clone(), POLL_INTERVAL);
+        Self::with_poller(wake, poller)
     }
 
-    /// An app with no polling thread, for rendering the UI without a window.
-    ///
-    /// The TUI verifies its palettes by rendering offscreen rather than
-    /// guessing (`rolen-tui/src/lib.rs:35`); this is the same idea for the
-    /// GUI - `egui::Context::run` builds the whole widget tree with no
-    /// windowing system, so the views can be proven to lay out.
-    pub fn headless(ctx: eframe::egui::Context) -> Self {
-        Self::with_poller(ctx, Poller::inert())
+    /// An app with no polling thread and a no-op waker, for rendering the UI
+    /// without a window.
+    pub fn headless() -> Self {
+        Self::with_poller(wake::no_op(), Poller::inert())
     }
 
-    fn with_poller(ctx: eframe::egui::Context, poller: Poller) -> Self {
+    fn with_poller(wake: Wake, poller: Poller) -> Self {
         Self {
             view: View::Dashboard,
-            jobs: Jobs::new(ctx),
+            jobs: Jobs::new(wake),
             poller,
             snap: Snapshot::default(),
             health: HashMap::new(),
@@ -136,13 +142,30 @@ impl RoleNApp {
             cli_output: String::new(),
             cli_report: None,
             doctor: None,
-            about_open: false,
+            doctor_modal: ModalState::default(),
+            about_modal: ModalState::default(),
             status: "ready".to_string(),
+            theme: ThemePreset::Dark,
+            theme_dirty: true, // the shell applies the initial preset on startup
+            exit_requested: false,
         }
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
+    }
+
+    /// A pending theme change for the shell to apply to the imgui context.
+    pub fn take_theme_change(&mut self) -> Option<ThemePreset> {
+        self.theme_dirty.then(|| {
+            self.theme_dirty = false;
+            self.theme
+        })
+    }
+
+    /// Did the user ask to quit? The shell checks this once per frame.
+    pub fn take_exit_request(&mut self) -> bool {
+        std::mem::take(&mut self.exit_requested)
     }
 
     /// Kick off a routing dry-run for the selected role.
@@ -181,14 +204,12 @@ impl RoleNApp {
 
     /// Append a chunk of agent output.
     ///
-    /// The buffer is capped: a chatty agent can emit megabytes, and egui lays
-    /// the whole label out every frame.
-    fn append_cli_output(&mut self, chunk: &str, ctx: &egui::Context) {
+    /// The buffer is capped: a chatty agent can emit megabytes, and the whole
+    /// buffer is drawn every frame.
+    fn append_cli_output(&mut self, chunk: &str) {
         const CAP: usize = 200_000;
         self.cli_output
-            .push_str(&crate::text::strip_ansi(&crate::text::renderable(
-                ctx, chunk,
-            )));
+            .push_str(&crate::text::strip_ansi(&crate::text::renderable(chunk)));
         if self.cli_output.len() > CAP {
             // Drop from the front on a char boundary, keeping the tail.
             let cut = self.cli_output.len() - CAP;
@@ -301,6 +322,7 @@ impl RoleNApp {
                         format!("config doctor: {failed} check(s) failed")
                     });
                     self.doctor = Some(rows);
+                    self.doctor_modal.open();
                 }
                 JobMsg::ProjectCreated(Ok(msg)) => {
                     self.set_status(msg);
@@ -375,10 +397,7 @@ impl RoleNApp {
                     self.set_status(format!("dry-run failed: {e}"));
                 }
                 JobMsg::ChatReply(reply) => self.apply_chat_reply(reply),
-                JobMsg::CliOutput(chunk) => {
-                    let ctx = self.jobs.ctx().clone();
-                    self.append_cli_output(&chunk, &ctx);
-                }
+                JobMsg::CliOutput(chunk) => self.append_cli_output(&chunk),
                 JobMsg::CliHarvested {
                     applied,
                     rejected,
@@ -409,13 +428,13 @@ impl RoleNApp {
     }
 
     /// Route a menu selection (or its keyboard shortcut) to real work.
-    fn dispatch(&mut self, action: Action, ctx: &egui::Context) {
+    fn dispatch(&mut self, action: Action) {
         match action {
             Action::NewProject => self.new_project.open(),
             Action::Doctor => {
                 self.jobs.spawn(jobs::DOCTOR, jobs::doctor);
             }
-            Action::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Exit => self.exit_requested = true,
             Action::AddProvider => {
                 self.add_provider.open();
                 self.view = View::Providers;
@@ -438,56 +457,50 @@ impl RoleNApp {
             }
             Action::QuickChat => self.view = View::Chat,
             Action::RunCliTask => self.open_cli_task(),
-            Action::Theme(pref) => ctx.set_theme(pref),
-            Action::About => self.about_open = true,
+            Action::Theme(preset) => {
+                self.theme = preset;
+                self.theme_dirty = true;
+            }
+            Action::About => self.about_modal.open(),
         }
     }
 
     /// Shortcuts that match the TUI's bindings.
-    fn shortcut(&self, ctx: &egui::Context) -> Option<Action> {
-        use egui::{Key, KeyboardShortcut, Modifiers};
-        const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::N);
-        const NEW_ALT: KeyboardShortcut =
-            KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::N);
-        const DOCTOR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F9);
-        const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F10);
-        const DRY_RUN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::D);
-        const CHAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Q);
-        const ABOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
-
-        ctx.input_mut(|i| {
-            if i.consume_shortcut(&NEW) || i.consume_shortcut(&NEW_ALT) {
-                Some(Action::NewProject)
-            } else if i.consume_shortcut(&DOCTOR) {
-                Some(Action::Doctor)
-            } else if i.consume_shortcut(&SETTINGS) {
-                Some(Action::Settings)
-            } else if i.consume_shortcut(&DRY_RUN) {
-                Some(Action::DryRun)
-            } else if i.consume_shortcut(&CHAT) {
-                Some(Action::QuickChat)
-            } else if i.consume_shortcut(&ABOUT) {
-                Some(Action::About)
-            } else {
-                None
-            }
-        })
+    fn shortcut(&self, ui: &Ui) -> Option<Action> {
+        const R: ShortcutRoute = ShortcutRoute::Focused;
+        let pressed =
+            |key: Key, mods: KeyMods| ui.shortcut_with_flags(KeyChord::new(key).with_mods(mods), R);
+        if pressed(Key::N, KeyMods::CTRL) || pressed(Key::N, KeyMods::CTRL | KeyMods::SHIFT) {
+            Some(Action::NewProject)
+        } else if pressed(Key::F9, KeyMods::empty()) {
+            Some(Action::Doctor)
+        } else if pressed(Key::F10, KeyMods::empty()) {
+            Some(Action::Settings)
+        } else if pressed(Key::D, KeyMods::CTRL) {
+            Some(Action::DryRun)
+        } else if pressed(Key::Q, KeyMods::CTRL) {
+            Some(Action::QuickChat)
+        } else if pressed(Key::F1, KeyMods::empty()) {
+            Some(Action::About)
+        } else {
+            None
+        }
     }
 
-    fn modals(&mut self, ctx: &egui::Context) {
-        if let Some(draft) = self.new_project.show(ctx) {
+    fn modals(&mut self, ui: &Ui) {
+        if let Some(draft) = self.new_project.show(ui) {
             self.jobs.spawn(jobs::NEW_PROJECT, move || {
                 jobs::scaffold_project(draft.name, draft.description, draft.stack)
             });
         }
 
-        if let Some(form) = self.settings.show(ctx) {
+        if let Some(form) = self.settings.show(ui) {
             self.jobs
                 .spawn(jobs::SAVE_CONFIG, move || jobs::save_config(form));
         }
 
         let cli_providers = self.runnable_cli_providers();
-        if let Some(req) = self.cli_task.show(ctx, &cli_providers) {
+        if let Some(req) = self.cli_task.show(ui, &cli_providers) {
             self.cli_output.clear();
             self.cli_report = None;
             self.view = View::Activity;
@@ -501,7 +514,7 @@ impl RoleNApp {
             });
         }
 
-        match self.add_provider.show(ctx) {
+        match self.add_provider.show(ui) {
             Some(ProviderRequest::Discover(form)) => {
                 self.jobs
                     .spawn(jobs::DISCOVER_MODELS, move || jobs::discover_models(form));
@@ -513,147 +526,159 @@ impl RoleNApp {
             None => {}
         }
 
-        let mut close_doctor = false;
-        if let Some(rows) = &self.doctor {
-            let response = egui::Modal::new(egui::Id::new("doctor-modal")).show(ctx, |ui| {
-                ui.set_width(560.0);
-                ui.heading("Config doctor");
-                ui.add_space(8.0);
-                for row in rows {
-                    ui.horizontal(|ui| {
-                        if row.ok {
-                            ui.colored_label(egui::Color32::from_rgb(0x2e, 0x7d, 0x32), "OK");
-                        } else {
-                            ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), "FAIL");
+        if self.doctor.is_some() {
+            match self.doctor_modal.begin(ui, "Config doctor") {
+                Some(_modal) => {
+                    ui.set_window_size_with_cond([600.0, 0.0], Condition::FirstUseEver);
+                    if let Some(rows) = &self.doctor {
+                        for row in rows {
+                            if row.ok {
+                                ui.text_colored(dialogs::OK, "OK  ");
+                            } else {
+                                ui.text_colored(dialogs::ERROR, "FAIL");
+                            }
+                            ui.same_line();
+                            ui.text(&row.name);
+                            ui.same_line();
+                            ui.text_disabled(&row.detail);
                         }
-                        ui.strong(&row.name);
-                        ui.label(&row.detail);
-                    });
+                    }
+                    ui.spacing();
+                    if ui.button("Close") {
+                        ui.close_current_popup();
+                    }
                 }
-                ui.add_space(10.0);
-                if ui.button("Close").clicked() {
-                    close_doctor = true;
-                }
-            });
-            if response.should_close() {
-                close_doctor = true;
+                // The popup was closed; drop the report with it.
+                None => self.doctor = None,
             }
         }
-        if close_doctor {
-            self.doctor = None;
-        }
 
-        if self.about_open {
-            let response = egui::Modal::new(egui::Id::new("about-modal")).show(ctx, |ui| {
-                ui.set_width(380.0);
-                ui.heading("RoleN");
-                ui.add_space(6.0);
-                ui.label(format!("version {}", env!("CARGO_PKG_VERSION")));
-                ui.label("A conductor for LLM-powered development.");
-                ui.label("MIT License");
-                ui.add_space(10.0);
-                if ui.button("Close").clicked() {
-                    self.about_open = false;
-                }
-            });
-            if response.should_close() {
-                self.about_open = false;
+        if let Some(_modal) = self.about_modal.begin(ui, "About RoleN") {
+            ui.text(format!("version {}", env!("CARGO_PKG_VERSION")));
+            ui.text("A conductor for LLM-powered development.");
+            ui.text("MIT License");
+            ui.spacing();
+            if ui.button("Close") {
+                ui.close_current_popup();
             }
         }
     }
-}
 
-impl eframe::App for RoleNApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.draw(ui);
-    }
-}
-
-impl RoleNApp {
-    /// The whole frame, independent of `eframe::Frame` so it can be driven by
-    /// `egui::Context::run_ui` in a test.
-    pub fn draw(&mut self, ui: &mut egui::Ui) {
+    /// The whole frame, driven by the shell's `Context::frame()`.
+    ///
+    /// Kept independent of the winit/glow plumbing so tests can build it on a
+    /// headless `Context`.
+    pub fn draw(&mut self, ui: &Ui) {
         self.handle_jobs();
         if let Some(snap) = self.poller.latest() {
             self.snap = snap;
         }
 
-        let ctx = ui.ctx().clone();
-        let mut action = self.shortcut(&ctx);
-        egui::Panel::top("menu").show(ui, |ui| {
-            if let Some(picked) = menu::show(ui) {
-                action = Some(picked);
-            }
-        });
-        if let Some(action) = action {
-            self.dispatch(action, &ctx);
-        }
-        self.modals(&ctx);
+        let mut action = self.shortcut(ui);
 
-        egui::Panel::left("nav")
-            .resizable(false)
-            .exact_size(160.0)
-            .show(ui, |ui| {
-                ui.add_space(8.0);
-                ui.heading("RoleN");
-                ui.add_space(8.0);
-                for v in View::ALL {
-                    ui.selectable_value(&mut self.view, v, v.label());
+        // One borderless window covers the whole viewport; the menu bar, nav
+        // column, content area and status bar all live inside it.
+        let viewport = ui.main_viewport();
+        ui.set_next_window_viewport(viewport.id());
+        let pos = viewport.pos();
+        let size = viewport.size();
+
+        let flags = WindowFlags::NO_TITLE_BAR
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_RESIZE
+            | WindowFlags::NO_MOVE
+            | WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS
+            | WindowFlags::MENU_BAR;
+
+        ui.window("rolen-root")
+            .flags(flags)
+            .position(pos, Condition::Always)
+            .size(size, Condition::Always)
+            .build(|| {
+                if let Some(picked) = menu::show(ui) {
+                    action = Some(picked);
                 }
-            });
 
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let avail = ui.content_region_avail();
+                let status_h = ui.frame_height_with_spacing() + 6.0;
+                let content_h = (avail[1] - status_h).max(80.0);
+
+                ui.child_window("nav")
+                    .size([160.0, content_h])
+                    .build(ui, || {
+                        ui.spacing();
+                        ui.text("RoleN");
+                        ui.separator();
+                        ui.spacing();
+                        for v in View::ALL {
+                            if ui
+                                .selectable_config(v.label())
+                                .selected(self.view == v)
+                                .build()
+                            {
+                                self.view = v;
+                            }
+                        }
+                    });
+
+                ui.same_line();
+
+                ui.child_window("main")
+                    .size([0.0, content_h])
+                    .build(ui, || {
+                        // Collection problems are surfaced rather than swallowed: a
+                        // dashboard of zeroes because the ledger would not open is
+                        // indistinguishable from a genuinely idle day otherwise.
+                        if !self.snap.problems.is_empty() {
+                            ui.text_colored(dialogs::ERROR, self.snap.problems.join("; "));
+                            ui.spacing();
+                        }
+
+                        ui.text(self.view.label());
+                        ui.separator();
+                        ui.spacing();
+
+                        match self.view {
+                            View::Dashboard => views::dashboard::show(self, ui),
+                            View::Providers => views::providers::show(self, ui),
+                            View::Projects => views::projects::show(self, ui),
+                            View::Rules => views::rules::show(self, ui),
+                            View::Questions => {
+                                ui.text_disabled("Not built yet.");
+                                ui.text_wrapped(
+                                    "The interrogation centre: pending clarifications grouped by \
+                                 project, answered with generated forms instead of one modal \
+                                 per question.",
+                                );
+                            }
+                            View::Activity => views::activity::show(self, ui),
+                            View::Chat => views::chat::show(self, ui),
+                        }
+                    });
+
+                ui.separator();
+                ui.text(&self.status);
+                ui.same_line();
+                let running: Vec<_> = self.jobs.running().copied().collect();
+                let right = if running.is_empty() {
                     match self.snap.generated {
-                        Some(t) => ui.weak(format!("updated {}", t.format("%H:%M:%S"))),
-                        None => ui.weak("waiting for first snapshot"),
-                    };
-                    let running: Vec<_> = self.jobs.running().copied().collect();
-                    if !running.is_empty() {
-                        ui.spinner();
-                        ui.weak(running.join(", "));
+                        Some(t) => format!("updated {}", t.format("%H:%M:%S")),
+                        None => "waiting for first snapshot".to_string(),
                     }
-                });
+                } else {
+                    format!("running: {}", running.join(", "))
+                };
+                let right_w = ui.calc_text_size(&right)[0];
+                let x = (ui.window_width() - right_w - 16.0).max(ui.cursor_pos_x());
+                ui.set_cursor_pos_x(x);
+                ui.text_disabled(right);
+
+                if let Some(action) = action {
+                    self.dispatch(action);
+                }
+                self.modals(ui);
             });
-        });
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            // Collection problems are surfaced rather than swallowed: a
-            // dashboard of zeroes because the ledger would not open is
-            // indistinguishable from a genuinely idle day otherwise.
-            if !self.snap.problems.is_empty() {
-                let problems = self.snap.problems.join("; ");
-                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), problems);
-                ui.add_space(4.0);
-            }
-
-            ui.heading(self.view.label());
-            ui.add_space(6.0);
-
-            match self.view {
-                View::Dashboard => views::dashboard::show(self, ui),
-                View::Providers => views::providers::show(self, ui),
-                View::Projects => views::projects::show(self, ui),
-                View::Rules => views::rules::show(self, ui),
-                View::Questions => placeholder(
-                    ui,
-                    "The interrogation centre: pending clarifications grouped by project, \
-                     answered with generated forms instead of one modal per question.",
-                ),
-                View::Activity => views::activity::show(self, ui),
-                View::Chat => views::chat::show(self, ui),
-            }
-        });
     }
-}
-
-/// Honest stub: says what belongs here rather than pretending to be empty.
-fn placeholder(ui: &mut egui::Ui, what: &str) {
-    ui.weak("Not built yet.");
-    ui.add_space(4.0);
-    ui.label(what);
 }
 
 #[cfg(test)]
@@ -661,27 +686,56 @@ mod tests {
     use super::*;
     use crate::state::{ProjectRow, ProviderRow, RuleRow, SessionRow, Tickets, Usage};
     use chrono::Utc;
+    use dear_imgui_rs::Context;
     use std::path::PathBuf;
 
-    /// Build the whole widget tree for `view` with no window and no IO.
+    /// A headless imgui context: no window, no GPU, but real layout. A widget
+    /// tree that panics - duplicate ids, unbalanced stacks - fails here.
     ///
-    /// egui panics on real layout mistakes - duplicate widget ids, a table
-    /// whose column count does not match its header - so this is a genuine
-    /// assertion, not a smoke test that only proves the code compiles.
+    /// The binding allows only one live context per thread set, and the test
+    /// harness runs tests on parallel threads, so tests serialize on a mutex.
+    struct TestUi {
+        ctx: Context,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl TestUi {
+        fn new() -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ctx = Context::create();
+            // Tests run with the crate root as cwd; don't leave imgui.ini behind.
+            let _ = ctx.set_ini_filename(None::<String>);
+            ctx.io_mut().set_display_size([1280.0, 820.0]);
+            ctx.io_mut().set_delta_time(1.0 / 60.0);
+            ctx.font_atlas()
+                .try_claim_legacy_renderer()
+                .expect("legacy renderer font atlas should be available")
+                .build();
+            Self { ctx, _guard: guard }
+        }
+
+        fn frame(&mut self, f: impl FnOnce(&mut RoleNApp, &Ui), app: &mut RoleNApp) {
+            {
+                let ui = self.ctx.frame();
+                f(app, ui);
+            }
+            // Ends the frame without drawing; the draw data is discarded.
+            let _ = self.ctx.render_legacy();
+        }
+    }
+
+    /// Build the whole widget tree for `view` with no window and no IO.
     fn render(view: View, snap: Snapshot, selected: Option<&str>) {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx.clone());
+        let mut ui = TestUi::new();
+        let mut app = RoleNApp::headless();
         app.view = view;
         app.snap = snap;
         app.selected_provider = selected.map(str::to_string);
-        // Two passes: egui resolves some sizing on the frame after first use,
-        // and a duplicate-id clash only surfaces once ids are remembered.
+        // Two passes: some sizing resolves on the frame after first use, and a
+        // duplicate-id clash only surfaces once ids are remembered.
         for _ in 0..2 {
-            let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-            // epaint asserts on drop that texture deltas were consumed, which
-            // a real backend would do when uploading to the GPU. There is no
-            // GPU here, so discard them explicitly.
-            output.textures_delta.clear();
+            ui.frame(|app, ui| app.draw(ui), &mut app);
         }
     }
 
@@ -720,7 +774,7 @@ mod tests {
                     name: "My Thing".into(),
                     dir: PathBuf::from("/ws/my-thing"),
                     description: "does a thing".into(),
-                    stack: vec!["rust".into(), "egui".into()],
+                    stack: vec!["rust".into(), "imgui".into()],
                     has_prd: true,
                     has_agents: true,
                     clarifications: 6,
@@ -818,14 +872,13 @@ mod tests {
     #[test]
     fn project_detail_pane_renders_for_every_row() {
         for p in populated().projects {
-            let ctx = egui::Context::default();
-            let mut app = RoleNApp::headless(ctx.clone());
+            let mut ui = TestUi::new();
+            let mut app = RoleNApp::headless();
             app.view = View::Projects;
             app.snap = populated();
             app.selected_project = Some(p.id.clone());
             for _ in 0..2 {
-                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-                output.textures_delta.clear();
+                ui.frame(|app, ui| app.draw(ui), &mut app);
             }
         }
     }
@@ -835,8 +888,8 @@ mod tests {
     #[test]
     fn modals_render_over_each_view() {
         for view in View::ALL {
-            let ctx = egui::Context::default();
-            let mut app = RoleNApp::headless(ctx.clone());
+            let mut ui = TestUi::new();
+            let mut app = RoleNApp::headless();
             app.view = view;
             app.snap = populated();
             app.new_project.open();
@@ -849,7 +902,7 @@ mod tests {
                 crit_pct: 95,
             });
             app.add_provider.open();
-            app.about_open = true;
+            app.about_modal.open();
             app.doctor = Some(vec![
                 CheckRow {
                     name: "config.toml".into(),
@@ -862,35 +915,48 @@ mod tests {
                     detail: "keychain unavailable".into(),
                 },
             ]);
+            app.doctor_modal.open();
             for _ in 0..2 {
-                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-                output.textures_delta.clear();
+                ui.frame(|app, ui| app.draw(ui), &mut app);
             }
         }
     }
 
-    /// The menu bar builds every submenu each frame; a duplicate widget id
-    /// across menus would panic here.
+    /// The menu bar builds every submenu each frame.
     #[test]
     fn menu_actions_dispatch_without_panicking() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx.clone());
+        let mut ui = TestUi::new();
+        let mut app = RoleNApp::headless();
         app.snap = populated();
-        // Exit and the job-spawning actions are exercised too: dispatch must be
-        // safe to call outside a real event loop.
         for action in [
             Action::NewProject,
             Action::About,
             Action::Settings,
             Action::AddProvider,
-            Action::Theme(egui::ThemePreference::Light),
-            Action::Theme(egui::ThemePreference::Dark),
-            Action::Exit,
+            Action::Theme(ThemePreset::Light),
+            Action::Theme(ThemePreset::Dark),
         ] {
-            app.dispatch(action, &ctx);
-            let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-            output.textures_delta.clear();
+            app.dispatch(action);
+            ui.frame(|app, ui| app.draw(ui), &mut app);
         }
+    }
+
+    /// A theme change is handed to the shell exactly once.
+    #[test]
+    fn a_theme_change_is_pending_until_the_shell_takes_it() {
+        let mut app = RoleNApp::headless();
+        app.theme_dirty = false;
+        app.dispatch(Action::Theme(ThemePreset::Light));
+        assert_eq!(app.take_theme_change(), Some(ThemePreset::Light));
+        assert_eq!(app.take_theme_change(), None);
+    }
+
+    #[test]
+    fn exit_is_a_request_the_shell_consumes() {
+        let mut app = RoleNApp::headless();
+        app.dispatch(Action::Exit);
+        assert!(app.take_exit_request());
+        assert!(!app.take_exit_request());
     }
 
     /// The Add Provider form swaps fields depending on the type - a cli entry
@@ -905,8 +971,8 @@ mod tests {
             ProviderType::OllamaCloud,
             ProviderType::OllamaRemote,
         ] {
-            let ctx = egui::Context::default();
-            let mut app = RoleNApp::headless(ctx.clone());
+            let mut ui = TestUi::new();
+            let mut app = RoleNApp::headless();
             app.view = View::Providers;
             app.snap = populated();
             app.add_provider.edit(crate::jobs::ProviderForm {
@@ -915,8 +981,7 @@ mod tests {
                 ..Default::default()
             });
             for _ in 0..2 {
-                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-                output.textures_delta.clear();
+                ui.frame(|app, ui| app.draw(ui), &mut app);
             }
         }
     }
@@ -944,15 +1009,14 @@ mod tests {
             DryRun::Cancelled,
         ];
         for outcome in outcomes {
-            let ctx = egui::Context::default();
-            let mut app = RoleNApp::headless(ctx.clone());
+            let mut ui = TestUi::new();
+            let mut app = RoleNApp::headless();
             app.view = View::Rules;
             app.snap = populated();
             app.dry_run_result = Some(outcome);
             app.dry_run_progress = Some("checking kimi (3/8)".into());
             for _ in 0..2 {
-                let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-                output.textures_delta.clear();
+                ui.frame(|app, ui| app.draw(ui), &mut app);
             }
         }
     }
@@ -961,8 +1025,7 @@ mod tests {
     /// sweep before it starts.
     #[test]
     fn a_new_dry_run_gets_a_fresh_cancel_flag() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx);
+        let mut app = RoleNApp::headless();
         app.start_dry_run();
         app.cancel_dry_run();
         assert!(app.dry_run_cancel.load(Ordering::Relaxed));
@@ -979,17 +1042,6 @@ mod tests {
         );
     }
 
-    /// Fonts are built lazily, and stripping output consults them, so lay out
-    /// one frame first - exactly what happens before any real chunk arrives.
-    fn warmed() -> egui::Context {
-        let ctx = egui::Context::default();
-        let mut out = ctx.run_ui(Default::default(), |ui| {
-            ui.label("warm up");
-        });
-        out.textures_delta.clear();
-        ctx
-    }
-
     fn turn(text: &str) -> rolen_providers::conversation::Turn {
         rolen_providers::conversation::Turn {
             text: text.to_string(),
@@ -1004,8 +1056,7 @@ mod tests {
     /// so the next request carries the conversation.
     #[test]
     fn a_reply_becomes_context_for_the_next_turn() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx);
+        let mut app = RoleNApp::headless();
         app.chat_history
             .push(rolen_providers::chat::ChatMessage::user("hello"));
         app.apply_chat_reply(Ok(turn("  hi there  ")));
@@ -1027,8 +1078,7 @@ mod tests {
     /// A failed turn must not leave two user messages in a row behind.
     #[test]
     fn a_failed_turn_is_removed_from_history() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx);
+        let mut app = RoleNApp::headless();
         app.chat_history
             .push(rolen_providers::chat::ChatMessage::user("hello"));
         app.apply_chat_reply(Err("HTTP 429".into()));
@@ -1047,8 +1097,7 @@ mod tests {
     /// A new chat must not bill its tokens to the previous conversation.
     #[test]
     fn resetting_starts_a_new_session() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx);
+        let mut app = RoleNApp::headless();
         app.chat_history
             .push(rolen_providers::chat::ChatMessage::user("hello"));
         app.apply_chat_reply(Ok(turn("hi")));
@@ -1063,8 +1112,7 @@ mod tests {
     /// Sending without a provider must not silently swallow the typed message.
     #[test]
     fn sending_without_a_provider_keeps_the_input() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx);
+        let mut app = RoleNApp::headless();
         app.chat_input = "hello".into();
         app.send_chat();
         assert_eq!(app.chat_input, "hello");
@@ -1075,29 +1123,27 @@ mod tests {
     /// must not split a multi-byte character.
     #[test]
     fn agent_output_is_capped_without_breaking_utf8() {
-        let ctx = warmed();
-        let mut app = RoleNApp::headless(ctx.clone());
+        let mut app = RoleNApp::headless();
         for _ in 0..40 {
             // 10k of multi-byte text per chunk.
-            app.append_cli_output(&"é".repeat(5_000), &ctx);
+            app.append_cli_output(&"é".repeat(5_000));
         }
         assert!(app.cli_output.len() <= 200_000 + 16);
-        // Still valid UTF-8 and still the same character throughout.
+        // All characters that remain are the ones that were fed in.
         assert!(app.cli_output.chars().all(|c| c == 'é'));
     }
 
     #[test]
     fn agent_output_has_escape_codes_stripped() {
-        let ctx = warmed();
-        let mut app = RoleNApp::headless(ctx.clone());
-        app.append_cli_output("\u{1b}[32m[mock-agent] done\u{1b}[0m\r\n", &ctx);
+        let mut app = RoleNApp::headless();
+        app.append_cli_output("\u{1b}[32m[mock-agent] done\u{1b}[0m\r\n");
         assert_eq!(app.cli_output, "[mock-agent] done\n");
     }
 
     #[test]
     fn activity_renders_a_finished_report() {
-        let ctx = egui::Context::default();
-        let mut app = RoleNApp::headless(ctx.clone());
+        let mut ui = TestUi::new();
+        let mut app = RoleNApp::headless();
         app.view = View::Activity;
         app.snap = populated();
         app.cli_output = "[mock-agent] working...\n".into();
@@ -1112,14 +1158,12 @@ mod tests {
             tokens_out_est: 800,
         });
         for _ in 0..2 {
-            let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-            output.textures_delta.clear();
+            ui.frame(|app, ui| app.draw(ui), &mut app);
         }
 
         // A non-zero exit renders down a different branch.
         app.cli_report.as_mut().unwrap().exit_code = Some(2);
-        let mut output = ctx.run_ui(Default::default(), |ui| app.draw(ui));
-        output.textures_delta.clear();
+        ui.frame(|app, ui| app.draw(ui), &mut app);
     }
 
     /// Collection problems are meant to be visible, not swallowed.

@@ -20,8 +20,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use eframe::egui;
 use rolen_core::ledger::Ledger;
+
+use crate::wake::Wake;
 
 /// Some reads are much dearer than the ledger aggregates and change slowly:
 /// quota costs one extra SQLite open per provider, and the project scan is a
@@ -142,7 +143,7 @@ pub struct Poller {
 }
 
 impl Poller {
-    pub fn spawn(ctx: egui::Context, interval: Duration) -> Self {
+    pub fn spawn(wake: Wake, interval: Duration) -> Self {
         let (tx, rx) = mpsc::channel();
         let refresh = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -151,7 +152,7 @@ impl Poller {
             let stop = Arc::clone(&stop);
             std::thread::Builder::new()
                 .name("rolen-gui:poller".to_string())
-                .spawn(move || worker(&ctx, &tx, &refresh, &stop, interval))
+                .spawn(move || worker(&wake, &tx, &refresh, &stop, interval))
                 .ok()
         };
         Self {
@@ -202,7 +203,7 @@ impl Drop for Poller {
 }
 
 fn worker(
-    ctx: &egui::Context,
+    wake: &Wake,
     tx: &mpsc::Sender<Snapshot>,
     refresh: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
@@ -279,7 +280,7 @@ fn worker(
         if tx.send(snapshot).is_err() {
             return; // UI is gone
         }
-        ctx.request_repaint();
+        wake();
         cycle = cycle.wrapping_add(1);
 
         // Sleep in slices so stop/refresh are honoured promptly instead of

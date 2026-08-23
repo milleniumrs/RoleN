@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use eframe::egui;
+use crate::wake::Wake;
 
 /// One provider's answer to a health sweep.
 #[derive(Debug, Clone)]
@@ -261,37 +261,32 @@ pub const REMOVE_PROVIDER: &str = "remove-provider";
 pub struct Emitter {
     name: &'static str,
     tx: Sender<(&'static str, JobMsg, bool)>,
-    ctx: egui::Context,
+    wake: Wake,
 }
 
 impl Emitter {
     pub fn progress(&self, msg: JobMsg) {
         let _ = self.tx.send((self.name, msg, false));
-        self.ctx.request_repaint();
+        (self.wake)();
     }
 }
 
 pub struct Jobs {
-    ctx: egui::Context,
+    wake: Wake,
     tx: Sender<(&'static str, JobMsg, bool)>,
     rx: Receiver<(&'static str, JobMsg, bool)>,
     running: BTreeSet<&'static str>,
 }
 
 impl Jobs {
-    pub fn new(ctx: egui::Context) -> Self {
+    pub fn new(wake: Wake) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
-            ctx,
+            wake,
             tx,
             rx,
             running: BTreeSet::new(),
         }
-    }
-
-    /// The egui context, for code that needs it while handling a result.
-    pub fn ctx(&self) -> &egui::Context {
-        &self.ctx
     }
 
     /// Is this specific job in flight?
@@ -323,22 +318,22 @@ impl Jobs {
             return false;
         }
         let tx = self.tx.clone();
-        let ctx = self.ctx.clone();
+        let wake = self.wake.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("rolen-gui:{name}"))
             .spawn(move || {
                 let emitter = Emitter {
                     name,
                     tx: tx.clone(),
-                    ctx: ctx.clone(),
+                    wake: wake.clone(),
                 };
                 let msg = work(&emitter);
                 // If the receiver is gone the window is closing; dropping the
                 // result is the correct behaviour.
                 let _ = tx.send((name, msg, true));
-                // Wake the UI thread: egui is not repainting continuously when
-                // idle, so without this the result would sit unnoticed.
-                ctx.request_repaint();
+                // Wake the UI thread: the event loop sleeps when idle, so
+                // without this the result would sit unnoticed.
+                wake();
             });
         if spawned.is_err() {
             self.running.remove(name);
