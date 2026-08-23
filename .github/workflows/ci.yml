@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   # CI runners have no usable OS keychain, so pin the secret backend to the
   # age-encrypted vault (and give it a password) for deterministic runs.
-  MAESTRO_SECRETS_BACKEND: vault
-  MAESTRO_VAULT_PASSWORD: ci-vault-password
+  ROLEN_SECRETS_BACKEND: vault
+  ROLEN_VAULT_PASSWORD: ci-vault-password
 
 jobs:
   test:
@@ -52,8 +52,8 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libwayland-dev
 
-      - name: fmt (Maestro packages only — do not follow path deps)
-        run: cargo fmt -p maestro-core -p maestro-providers -p maestro-runtime -p maestro-orchestrator -p maestro-cliadapters -p maestro-tui -p maestro-gui -p maestro-cli -- --check
+      - name: fmt (RoleN packages only — do not follow path deps)
+        run: cargo fmt -p rolen-core -p rolen-providers -p rolen-runtime -p rolen-orchestrator -p rolen-cliadapters -p rolen-tui -p rolen-gui -p rolen-cli -- --check
 
       - name: clippy
         run: cargo clippy --workspace -- -D warnings
@@ -63,6 +63,6 @@ jobs:
 
       - name: headless smoke (no providers configured in CI)
         run: |
-          cargo run -p maestro-cli -- config doctor
-          cargo run -p maestro-cli -- quota --json
-          cargo run -p maestro-cli -- rule list
+          cargo run -p rolen-cli -- config doctor
+          cargo run -p rolen-cli -- quota --json
+          cargo run -p rolen-cli -- rule list

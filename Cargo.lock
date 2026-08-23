@@ -2432,120 +2432,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "maestro-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "maestro-cliadapters",
- "maestro-core",
- "maestro-gui",
- "maestro-orchestrator",
- "maestro-providers",
- "maestro-runtime",
- "maestro-tui",
- "serde_json",
- "serde_yaml",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "maestro-cliadapters"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "maestro-core",
- "maestro-orchestrator",
- "maestro-providers",
- "maestro-runtime",
- "portable-pty",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "maestro-core"
-version = "0.1.0"
-dependencies = [
- "age",
- "chrono",
- "dirs",
- "keyring",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.20",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "maestro-gui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "eframe",
- "egui_extras",
- "maestro-cliadapters",
- "maestro-core",
- "maestro-providers",
-]
-
-[[package]]
-name = "maestro-orchestrator"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "maestro-core",
- "maestro-providers",
- "maestro-runtime",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "maestro-providers"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "maestro-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "maestro-runtime"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "maestro-core",
- "maestro-providers",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "maestro-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "appcui",
- "chrono",
- "maestro-cliadapters",
- "maestro-core",
- "maestro-orchestrator",
- "maestro-providers",
- "serde_yaml",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3640,6 +3526,120 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rolen-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "rolen-cliadapters",
+ "rolen-core",
+ "rolen-gui",
+ "rolen-orchestrator",
+ "rolen-providers",
+ "rolen-runtime",
+ "rolen-tui",
+ "serde_json",
+ "serde_yaml",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rolen-cliadapters"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "portable-pty",
+ "rolen-core",
+ "rolen-orchestrator",
+ "rolen-providers",
+ "rolen-runtime",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "rolen-core"
+version = "0.1.0"
+dependencies = [
+ "age",
+ "chrono",
+ "dirs",
+ "keyring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.20",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rolen-gui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "egui_extras",
+ "rolen-cliadapters",
+ "rolen-core",
+ "rolen-providers",
+]
+
+[[package]]
+name = "rolen-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rolen-core",
+ "rolen-providers",
+ "rolen-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "rolen-providers"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "rolen-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rolen-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rolen-core",
+ "rolen-providers",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "rolen-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "appcui",
+ "chrono",
+ "rolen-cliadapters",
+ "rolen-core",
+ "rolen-orchestrator",
+ "rolen-providers",
+ "serde_yaml",
 ]
 
 [[package]]

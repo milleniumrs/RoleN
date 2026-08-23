@@ -1,0 +1,15 @@
+[package]
+name = "rolen-gui"
+description = "egui/eframe desktop front-end for RoleN (peer of rolen-tui)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eframe.workspace = true
+egui_extras.workspace = true
+rolen-core.workspace = true
+rolen-providers.workspace = true
+rolen-cliadapters.workspace = true
+chrono.workspace = true
