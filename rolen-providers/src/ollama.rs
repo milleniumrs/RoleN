@@ -78,6 +78,9 @@ pub fn parse_chat(json: &Value) -> Result<ChatResponse, ProviderError> {
     Ok(ChatResponse {
         text,
         tokens_in,
+        // Ollama reuses a KV cache but never bills for it and never reports
+        // it, so there is no cached subset to split out.
+        tokens_cached: 0,
         tokens_out,
         latency_ms: 0,
     })
@@ -115,6 +118,7 @@ pub fn parse_tags(json: &Value) -> Vec<Model> {
                         vision,
                         tools,
                         streaming: true,
+                        manual: false,
                     })
                 })
                 .collect()
@@ -182,6 +186,7 @@ pub fn parse_tools_chat(json: &Value) -> Result<ToolsChatResponse, ProviderError
         },
         tool_calls,
         tokens_in: json["prompt_eval_count"].as_u64().unwrap_or(0),
+        tokens_cached: 0,
         tokens_out: json["eval_count"].as_u64().unwrap_or(0),
         latency_ms: 0,
     })

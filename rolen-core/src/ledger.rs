@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     id          TEXT PRIMARY KEY,
     session_id  TEXT NOT NULL,
     provider_id TEXT NOT NULL,
-    tokens_in   INTEGER NOT NULL DEFAULT 0,
+    tokens_in     INTEGER NOT NULL DEFAULT 0,
+    -- subset of tokens_in served from the provider's prompt cache
+    tokens_cached INTEGER NOT NULL DEFAULT 0,
     tokens_out  INTEGER NOT NULL DEFAULT 0,
     cost        REAL    NOT NULL DEFAULT 0,
     latency_ms  INTEGER,
@@ -66,19 +68,47 @@ impl Ledger {
 
     fn init(&self) -> Result<(), CoreError> {
         self.conn.execute_batch(SCHEMA)?;
+        self.migrate()?;
         Ok(())
+    }
+
+    /// Bring an older database up to the current schema.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+    /// exists, so columns added after a release need an explicit ALTER. Each
+    /// step is guarded by a column check and is safe to run repeatedly.
+    fn migrate(&self) -> Result<(), CoreError> {
+        if !self.has_column("ledger_entries", "tokens_cached")? {
+            self.conn.execute_batch(
+                "ALTER TABLE ledger_entries ADD COLUMN tokens_cached INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn has_column(&self, table: &str, column: &str) -> Result<bool, CoreError> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn record(&self, e: &LedgerEntry) -> Result<(), CoreError> {
         self.conn.execute(
             "INSERT INTO ledger_entries
-             (id, session_id, provider_id, tokens_in, tokens_out, cost, latency_ms, ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, session_id, provider_id, tokens_in, tokens_cached, tokens_out, cost, latency_ms, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 e.id,
                 e.session_id,
                 e.provider_id,
                 e.tokens_in,
+                e.tokens_cached,
                 e.tokens_out,
                 e.cost,
                 e.latency_ms.map(|v| v as i64),
@@ -296,5 +326,132 @@ pub struct UsageSummary {
 impl UsageSummary {
     pub fn total_tokens(&self) -> u64 {
         self.tokens_in + self.tokens_out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// A scratch database path that cleans itself up.
+    struct TempDb(std::path::PathBuf);
+
+    impl TempDb {
+        fn new(tag: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "rolen-ledger-{tag}-{}.sqlite3",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            Self(p)
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn entry(id: &str, tokens_in: u64, tokens_cached: u64) -> LedgerEntry {
+        LedgerEntry {
+            id: id.into(),
+            session_id: "s1".into(),
+            provider_id: "kimi".into(),
+            tokens_in,
+            tokens_cached,
+            tokens_out: 10,
+            cost: 1.5,
+            latency_ms: Some(42),
+            ts: chrono::Utc::now(),
+        }
+    }
+
+    /// The schema as it shipped in v0.2.0, before cached pricing.
+    const V020_SCHEMA: &str = "
+    CREATE TABLE ledger_entries (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, provider_id TEXT NOT NULL,
+        tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+        cost REAL NOT NULL DEFAULT 0, latency_ms INTEGER, ts TEXT NOT NULL);
+    ";
+
+    #[test]
+    fn a_fresh_database_has_the_cached_column() {
+        let db = TempDb::new("fresh");
+        let l = Ledger::open(&db.0).unwrap();
+        assert!(l.has_column("ledger_entries", "tokens_cached").unwrap());
+    }
+
+    #[test]
+    fn an_existing_database_is_migrated_in_place() {
+        let db = TempDb::new("migrate");
+        // Lay down the old schema with a row in it, as an upgrader would have.
+        {
+            let conn = Connection::open(&db.0).unwrap();
+            conn.execute_batch(V020_SCHEMA).unwrap();
+            conn.execute(
+                "INSERT INTO ledger_entries (id, session_id, provider_id, tokens_in, tokens_out, cost, ts)
+                 VALUES ('old', 's0', 'kimi', 100, 20, 0.0, '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let l = Ledger::open(&db.0).unwrap();
+        assert!(l.has_column("ledger_entries", "tokens_cached").unwrap());
+
+        // The pre-existing row survives and reads back as "no cache hits",
+        // which bills it exactly as it was billed before.
+        let cached: i64 = l
+            .conn
+            .query_row(
+                "SELECT tokens_cached FROM ledger_entries WHERE id = 'old'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cached, 0);
+        assert_eq!(l.count_entries().unwrap(), 1);
+    }
+
+    #[test]
+    fn migration_is_safe_to_run_twice() {
+        let db = TempDb::new("twice");
+        Ledger::open(&db.0).unwrap();
+        // Re-opening runs init() again; a second ALTER would error.
+        let l = Ledger::open(&db.0).unwrap();
+        assert!(l.has_column("ledger_entries", "tokens_cached").unwrap());
+    }
+
+    #[test]
+    fn cached_tokens_round_trip_through_the_ledger() {
+        let db = TempDb::new("roundtrip");
+        let l = Ledger::open(&db.0).unwrap();
+        l.record(&entry("e1", 1000, 800)).unwrap();
+        let cached: i64 = l
+            .conn
+            .query_row(
+                "SELECT tokens_cached FROM ledger_entries WHERE id = 'e1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cached, 800);
+    }
+
+    #[test]
+    fn cached_tokens_do_not_inflate_the_usage_total() {
+        // tokens_in already counts the cached ones, so totals must not
+        // double-count them.
+        let db = TempDb::new("totals");
+        let l = Ledger::open(&db.0).unwrap();
+        l.record(&entry("e1", 1000, 800)).unwrap();
+        let u = l.usage_since(Some("kimi"), "2000-01-01T00:00:00Z").unwrap();
+        assert_eq!(u.tokens_in, 1000);
+        assert_eq!(u.total_tokens(), 1010);
     }
 }

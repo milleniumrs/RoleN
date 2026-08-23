@@ -1268,7 +1268,14 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
             let r = providers::test::test_prompt(&id, model.as_deref(), &prompt)?;
             println!("model:    {}", r.model);
             println!("reply:    {}", r.text.trim());
-            println!("tokens:   {} in / {} out", r.tokens_in, r.tokens_out);
+            if r.tokens_cached > 0 {
+                println!(
+                    "tokens:   {} in ({} from cache) / {} out",
+                    r.tokens_in, r.tokens_cached, r.tokens_out
+                );
+            } else {
+                println!("tokens:   {} in / {} out", r.tokens_in, r.tokens_out);
+            }
             println!("cost:     ${:.6}", r.cost);
             println!("latency:  {} ms", r.latency_ms);
             println!("ledgered — see `rolen quota` or the TUI dashboard");

@@ -56,8 +56,13 @@ pub fn send(
     let response = crate::client::chat(&provider, &request)?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
-    let cost =
-        crate::test::estimate_cost(&provider, model, response.tokens_in, response.tokens_out);
+    let cost = crate::test::estimate_cost(
+        &provider,
+        model,
+        response.tokens_in,
+        response.tokens_cached,
+        response.tokens_out,
+    );
 
     if let Ok(ledger) = Ledger::open_default() {
         let now = chrono::Utc::now();
@@ -66,6 +71,7 @@ pub fn send(
             session_id: session_id.to_string(),
             provider_id: provider_id.to_string(),
             tokens_in: response.tokens_in,
+            tokens_cached: response.tokens_cached,
             tokens_out: response.tokens_out,
             cost,
             latency_ms: Some(response.latency_ms),

@@ -200,11 +200,78 @@ pub fn refresh_models(provider_id: &str) -> Result<usize, ProviderError> {
         .get(provider_id)
         .ok_or_else(|| ProviderError::NotFound(provider_id.into()))?
         .clone();
-    let models = list_models(&provider)?;
-    let n = models.len();
+    let discovered = list_models(&provider)?;
     let mut updated = provider;
-    updated.models = models;
+    updated.models = merge_models(&updated.models, discovered);
+    let n = updated.models.len();
     reg.upsert(updated);
     reg.save()?;
     Ok(n)
+}
+
+/// Combine a fresh discovery with the models the user added by hand.
+///
+/// Discovery is authoritative for everything it returns. Manual entries it
+/// does not mention are kept, because the endpoint not listing a model does
+/// not mean the model cannot be called — that is the whole reason to add one.
+/// A manual entry the API has started advertising stops being manual: it is
+/// now discoverable and should track whatever the API reports.
+pub fn merge_models(existing: &[Model], discovered: Vec<Model>) -> Vec<Model> {
+    let mut out = discovered;
+    for m in existing.iter().filter(|m| m.manual) {
+        if !out.iter().any(|d| d.id == m.id) {
+            out.push(m.clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_models;
+    use rolen_core::types::Model;
+
+    fn model(id: &str, manual: bool) -> Model {
+        Model {
+            id: id.into(),
+            manual,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn discovery_replaces_discovered_models() {
+        let existing = vec![model("old", false), model("kept", false)];
+        let out = merge_models(&existing, vec![model("kept", false), model("new", false)]);
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["kept", "new"]);
+    }
+
+    #[test]
+    fn a_manual_model_survives_a_refresh_that_omits_it() {
+        // The whole point: kimi's /models does not list k3-256k, but it works.
+        let existing = vec![model("kimi-k3", false), model("kimi-k3-256k", true)];
+        let out = merge_models(&existing, vec![model("kimi-k3", false)]);
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["kimi-k3", "kimi-k3-256k"]);
+        assert!(out.iter().find(|m| m.id == "kimi-k3-256k").unwrap().manual);
+    }
+
+    #[test]
+    fn a_manual_model_the_api_now_lists_stops_being_manual() {
+        let existing = vec![model("kimi-k3-256k", true)];
+        let out = merge_models(&existing, vec![model("kimi-k3-256k", false)]);
+        assert_eq!(out.len(), 1, "must not be duplicated");
+        assert!(!out[0].manual);
+    }
+
+    #[test]
+    fn an_empty_discovery_still_keeps_manual_models() {
+        // A provider whose /models endpoint is broken or empty must not
+        // silently drop the models the user added by hand.
+        let existing = vec![model("api-one", false), model("hand-added", true)];
+        let out = merge_models(&existing, vec![]);
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["hand-added"]);
+    }
 }

@@ -102,14 +102,34 @@ pub fn parse_message(json: &Value) -> Result<ChatResponse, ProviderError> {
     if text.is_empty() {
         return Err(ProviderError::Parse("no text block in content[]".into()));
     }
-    let tokens_in = json["usage"]["input_tokens"].as_u64().unwrap_or(0);
+    let (tokens_in, tokens_cached) = prompt_tokens(json);
     let tokens_out = json["usage"]["output_tokens"].as_u64().unwrap_or(0);
     Ok(ChatResponse {
         text,
         tokens_in,
+        tokens_cached,
         tokens_out,
         latency_ms: 0,
     })
+}
+
+/// Total prompt tokens and the cached subset.
+///
+/// Anthropic reports these differently to everyone else: `input_tokens`
+/// *excludes* cache traffic, which arrives as separate `cache_read_input_tokens`
+/// and `cache_creation_input_tokens` counters. RoleN's convention is that
+/// `tokens_in` is everything, so the three are summed here.
+///
+/// Cache *creation* is folded into fresh input rather than the cached subset:
+/// Anthropic charges a premium for writing the cache, so billing it at the
+/// cheap cached rate would understate the cost. Billing it at the normal input
+/// rate is the closer of the two available answers.
+pub fn prompt_tokens(json: &Value) -> (u64, u64) {
+    let usage = &json["usage"];
+    let fresh = usage["input_tokens"].as_u64().unwrap_or(0);
+    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    let written = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+    (fresh + cached + written, cached)
 }
 
 /// Pure parser — unit-tested without network.
@@ -261,10 +281,12 @@ pub fn parse_tools_response(json: &Value) -> Result<ToolsChatResponse, ProviderE
             }
         }
     };
+    let (tokens_in, tokens_cached) = prompt_tokens(json);
     Ok(ToolsChatResponse {
         text,
         tool_calls,
-        tokens_in: json["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        tokens_in,
+        tokens_cached,
         tokens_out: json["usage"]["output_tokens"].as_u64().unwrap_or(0),
         latency_ms: 0,
         stop,
@@ -288,6 +310,40 @@ mod tests {
         assert_eq!(r.text, "OK");
         assert_eq!(r.tokens_in, 20);
         assert_eq!(r.tokens_out, 4);
+        assert_eq!(r.tokens_cached, 0);
+    }
+
+    #[test]
+    fn cache_traffic_is_added_to_input_tokens() {
+        // Anthropic's input_tokens excludes cache traffic, unlike everyone
+        // else, so the three counters have to be summed to get the total.
+        let json = json!({
+            "content": [{"type": "text", "text": "OK"}],
+            "usage": {
+                "input_tokens": 200,
+                "cache_read_input_tokens": 800,
+                "output_tokens": 10
+            }
+        });
+        let r = parse_message(&json).unwrap();
+        assert_eq!(r.tokens_in, 1000);
+        assert_eq!(r.tokens_cached, 800);
+    }
+
+    #[test]
+    fn cache_creation_bills_as_fresh_input_not_as_a_hit() {
+        // Writing the cache costs more than reading it, so it must not land
+        // in the cheap cached bucket.
+        let json = json!({
+            "usage": {
+                "input_tokens": 100,
+                "cache_creation_input_tokens": 400,
+                "cache_read_input_tokens": 500
+            }
+        });
+        let (total, cached) = prompt_tokens(&json);
+        assert_eq!(total, 1000);
+        assert_eq!(cached, 500);
     }
 
     #[test]
