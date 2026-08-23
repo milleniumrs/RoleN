@@ -16,6 +16,7 @@ pub struct TestResult {
     pub model: String,
     pub text: String,
     pub tokens_in: u64,
+    pub tokens_cached: u64,
     pub tokens_out: u64,
     pub cost: f64,
     pub latency_ms: u64,
@@ -26,11 +27,17 @@ pub struct TestResult {
 /// A model with no price recorded costs 0.0 — the same as a free local one.
 /// The two are distinguishable through [`rolen_core::pricing::Pricing::resolve`]
 /// when it matters; here there is nothing to bill either way.
-pub fn estimate_cost(provider: &Provider, model_id: &str, tokens_in: u64, tokens_out: u64) -> f64 {
+pub fn estimate_cost(
+    provider: &Provider,
+    model_id: &str,
+    tokens_in: u64,
+    tokens_cached: u64,
+    tokens_out: u64,
+) -> f64 {
     let pricing = Pricing::load().unwrap_or_default();
     pricing
         .resolve(provider.ptype, &provider.id, model_id)
-        .cost(tokens_in, tokens_out)
+        .cost(tokens_in, tokens_cached, tokens_out)
 }
 
 pub fn test_prompt(
@@ -57,7 +64,13 @@ pub fn test_prompt(
 
     let req = ChatRequest::single(model_id.clone(), prompt);
     let resp = client::chat(&provider, &req)?;
-    let cost = estimate_cost(&provider, &model_id, resp.tokens_in, resp.tokens_out);
+    let cost = estimate_cost(
+        &provider,
+        &model_id,
+        resp.tokens_in,
+        resp.tokens_cached,
+        resp.tokens_out,
+    );
 
     // ledger the usage (FR-4.6)
     let ledger = Ledger::open_default()?;
@@ -69,6 +82,7 @@ pub fn test_prompt(
         session_id: format!("manual:{provider_id}"),
         provider_id: provider_id.to_string(),
         tokens_in: resp.tokens_in,
+        tokens_cached: resp.tokens_cached,
         tokens_out: resp.tokens_out,
         cost,
         latency_ms: Some(resp.latency_ms),
@@ -80,6 +94,7 @@ pub fn test_prompt(
         model: model_id,
         text: resp.text,
         tokens_in: resp.tokens_in,
+        tokens_cached: resp.tokens_cached,
         tokens_out: resp.tokens_out,
         cost,
         latency_ms: resp.latency_ms,

@@ -28,9 +28,9 @@ impl ProviderType {
     }
 }
 
-/// One model in a provider's catalogue. Rebuilt from the provider's API on
-/// every discovery, so nothing durable belongs here — prices live in
-/// `rolen-core::pricing`, keyed by provider and model id.
+/// One model in a provider's catalogue. Discovered models are rebuilt from the
+/// provider's API on every refresh, so nothing durable belongs here — prices
+/// live in `rolen-core::pricing`, keyed by provider and model id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,
@@ -42,6 +42,13 @@ pub struct Model {
     pub tools: bool,
     #[serde(default)]
     pub streaming: bool,
+    /// Added by hand rather than found by discovery.
+    ///
+    /// Providers routinely serve models their `/models` endpoint never lists.
+    /// A manual entry survives refresh so those stay usable and priced; a
+    /// discovered one is replaced by whatever the API currently says.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -341,8 +348,14 @@ pub struct LedgerEntry {
     pub id: String,
     pub session_id: String,
     pub provider_id: String,
+    /// All prompt tokens, cache hits included.
     #[serde(default)]
     pub tokens_in: u64,
+    /// The subset of `tokens_in` served from the provider's prompt cache.
+    /// Rows written before cached pricing existed read back as 0, which
+    /// bills them exactly as they were billed before.
+    #[serde(default)]
+    pub tokens_cached: u64,
     #[serde(default)]
     pub tokens_out: u64,
     #[serde(default)]

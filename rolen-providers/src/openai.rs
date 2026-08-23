@@ -76,9 +76,27 @@ pub fn parse_chat_response(json: &Value) -> Result<ChatResponse, ProviderError> 
     Ok(ChatResponse {
         text,
         tokens_in,
+        tokens_cached: cached_prompt_tokens(json),
         tokens_out,
         latency_ms: 0,
     })
+}
+
+/// Cache hits inside `usage.prompt_tokens`.
+///
+/// `prompt_tokens` already counts cached tokens, so this is a subset, not an
+/// extra. Providers that do not cache, or do not report it, leave the field
+/// out and get 0. Kimi, DeepSeek and OpenAI all use this shape.
+pub fn cached_prompt_tokens(json: &Value) -> u64 {
+    let details = &json["usage"]["prompt_tokens_details"];
+    let cached = details["cached_tokens"]
+        .as_u64()
+        // DeepSeek reports the same number under its own name.
+        .or_else(|| json["usage"]["prompt_cache_hit_tokens"].as_u64())
+        .unwrap_or(0);
+    // Never claim more cache hits than there were prompt tokens: the cost
+    // split subtracts this and a bad number would bill negative fresh input.
+    cached.min(json["usage"]["prompt_tokens"].as_u64().unwrap_or(0))
 }
 
 /// Pure parser — unit-tested without network.
@@ -237,6 +255,7 @@ pub fn parse_tools_response(json: &Value) -> Result<ToolsChatResponse, ProviderE
         text,
         tool_calls,
         tokens_in: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
+        tokens_cached: cached_prompt_tokens(json),
         tokens_out: json["usage"]["completion_tokens"].as_u64().unwrap_or(0),
         latency_ms: 0,
         stop,
@@ -285,6 +304,46 @@ mod tests {
         assert_eq!(r.text, "OK");
         assert_eq!(r.tokens_in, 12);
         assert_eq!(r.tokens_out, 3);
+        // no cache reported by this provider
+        assert_eq!(r.tokens_cached, 0);
+    }
+
+    #[test]
+    fn reads_cache_hits_as_a_subset_of_prompt_tokens() {
+        let json = json!({
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 10,
+                "prompt_tokens_details": {"cached_tokens": 800}
+            }
+        });
+        let r = parse_chat_response(&json).unwrap();
+        // prompt_tokens already includes the cached ones
+        assert_eq!(r.tokens_in, 1000);
+        assert_eq!(r.tokens_cached, 800);
+    }
+
+    #[test]
+    fn accepts_the_deepseek_spelling_of_cache_hits() {
+        let json = json!({
+            "usage": {"prompt_tokens": 500, "prompt_cache_hit_tokens": 128}
+        });
+        assert_eq!(cached_prompt_tokens(&json), 128);
+    }
+
+    #[test]
+    fn a_cache_count_larger_than_the_prompt_is_clamped() {
+        let json = json!({
+            "usage": {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 999}}
+        });
+        assert_eq!(cached_prompt_tokens(&json), 100);
+    }
+
+    #[test]
+    fn a_missing_usage_block_reports_no_cache() {
+        assert_eq!(cached_prompt_tokens(&json!({})), 0);
+        assert_eq!(cached_prompt_tokens(&json!({"usage": {}})), 0);
     }
 
     #[test]

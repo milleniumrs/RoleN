@@ -65,7 +65,12 @@ impl ChatRequest {
 #[derive(Debug, Clone, Default)]
 pub struct ChatResponse {
     pub text: String,
+    /// All prompt tokens, cache hits included.
     pub tokens_in: u64,
+    /// The subset of `tokens_in` that was served from the provider's prompt
+    /// cache, and so billed at the cheaper cached rate. 0 when the provider
+    /// does not report caching.
+    pub tokens_cached: u64,
     pub tokens_out: u64,
     pub latency_ms: u64,
 }
@@ -130,7 +135,10 @@ pub enum StopKind {
 pub struct ToolsChatResponse {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
+    /// All prompt tokens, cache hits included.
     pub tokens_in: u64,
+    /// The cached subset of `tokens_in` (see [`ChatResponse::tokens_cached`]).
+    pub tokens_cached: u64,
     pub tokens_out: u64,
     pub latency_ms: u64,
     pub stop: StopKind,

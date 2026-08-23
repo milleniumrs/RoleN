@@ -115,6 +115,8 @@ pub fn run_cli_session(
         session_id: session_id.clone(),
         provider_id: provider.id.clone(),
         tokens_in: tokens_in_est,
+        // A wrapped CLI reports no usage block, so cache hits are unknowable.
+        tokens_cached: 0,
         tokens_out: tokens_out_est,
         cost: 0.0,
         latency_ms: None,
