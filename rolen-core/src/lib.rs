@@ -8,6 +8,7 @@ pub mod config;
 pub mod doctor;
 pub mod error;
 pub mod ledger;
+pub mod pricing;
 pub mod project;
 pub mod rules;
 pub mod secrets;

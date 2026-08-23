@@ -17,6 +17,20 @@ pub enum ProviderType {
     OllamaRemote,
 }
 
+impl ProviderType {
+    /// Whether tokens through this provider are charged per token.
+    ///
+    /// A local Ollama server, and one reached over an SSH tunnel, both run on
+    /// hardware you are already paying for, so there is no per-token price to
+    /// know. Ollama's hosted cloud bills like any other API.
+    pub fn is_metered(self) -> bool {
+        !matches!(self, Self::OllamaLocal | Self::OllamaRemote)
+    }
+}
+
+/// One model in a provider's catalogue. Rebuilt from the provider's API on
+/// every discovery, so nothing durable belongs here — prices live in
+/// `rolen-core::pricing`, keyed by provider and model id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,
@@ -28,12 +42,6 @@ pub struct Model {
     pub tools: bool,
     #[serde(default)]
     pub streaming: bool,
-    /// USD per million input tokens (FR-1.5, P1)
-    #[serde(default)]
-    pub cost_in_per_mtok: Option<f64>,
-    /// USD per million output tokens (FR-1.5, P1)
-    #[serde(default)]
-    pub cost_out_per_mtok: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

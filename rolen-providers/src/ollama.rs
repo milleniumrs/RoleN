@@ -115,7 +115,6 @@ pub fn parse_tags(json: &Value) -> Vec<Model> {
                         vision,
                         tools,
                         streaming: true,
-                        ..Default::default()
                     })
                 })
                 .collect()

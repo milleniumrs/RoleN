@@ -7,6 +7,7 @@ use crate::client;
 use crate::error::ProviderError;
 use crate::registry::ProviderRegistry;
 use rolen_core::ledger::Ledger;
+use rolen_core::pricing::Pricing;
 use rolen_core::types::{LedgerEntry, Provider};
 
 #[derive(Debug, Clone)]
@@ -20,14 +21,16 @@ pub struct TestResult {
     pub latency_ms: u64,
 }
 
-/// Estimate cost in USD from the provider's per-model cost table (FR-1.5).
+/// Estimate cost in USD from the entered price list (FR-1.5).
+///
+/// A model with no price recorded costs 0.0 — the same as a free local one.
+/// The two are distinguishable through [`rolen_core::pricing::Pricing::resolve`]
+/// when it matters; here there is nothing to bill either way.
 pub fn estimate_cost(provider: &Provider, model_id: &str, tokens_in: u64, tokens_out: u64) -> f64 {
-    let Some(m) = provider.models.iter().find(|m| m.id == model_id) else {
-        return 0.0;
-    };
-    let ci = m.cost_in_per_mtok.unwrap_or(0.0);
-    let co = m.cost_out_per_mtok.unwrap_or(0.0);
-    (tokens_in as f64 * ci + tokens_out as f64 * co) / 1_000_000.0
+    let pricing = Pricing::load().unwrap_or_default();
+    pricing
+        .resolve(provider.ptype, &provider.id, model_id)
+        .cost(tokens_in, tokens_out)
 }
 
 pub fn test_prompt(

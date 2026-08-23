@@ -104,6 +104,12 @@ pub fn subscriptions_file() -> Result<PathBuf, CoreError> {
     Ok(config_dir()?.join("subscriptions.toml"))
 }
 
+/// Per-model prices. Separate from providers.toml because model discovery
+/// rewrites a provider's model list wholesale (see rolen-core::pricing).
+pub fn pricing_file() -> Result<PathBuf, CoreError> {
+    Ok(config_dir()?.join("pricing.toml"))
+}
+
 pub fn ledger_file() -> Result<PathBuf, CoreError> {
     Ok(data_dir()?.join("ledger.sqlite3"))
 }
