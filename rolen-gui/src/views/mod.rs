@@ -1,4 +1,4 @@
-//! Screens. Each view is a plain function over `(&mut RoleNApp, &mut Ui)` so
+//! Screens. Each view is a plain function over `(&mut RoleNApp, &Ui)` so
 //! the app owns all state and the views stay free of their own caches - the
 //! snapshot is the single source of truth for anything read from disk.
 

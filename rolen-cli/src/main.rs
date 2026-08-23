@@ -21,8 +21,6 @@ struct Cli {
 enum Commands {
     /// Launch the TUI (default when no subcommand is given)
     Tui,
-    /// Launch the desktop GUI window
-    Gui,
     /// Manage and diagnose configuration
     Config {
         #[command(subcommand)]
@@ -308,11 +306,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None | Some(Commands::Tui) => rolen_tui::run()?,
-        // eframe's error type is not `anyhow`-compatible, so flatten it into a
-        // message rather than leaking the windowing stack into the CLI's API.
-        Some(Commands::Gui) => {
-            rolen_gui::run().map_err(|e| anyhow::anyhow!("could not start the GUI: {e}"))?
-        }
         Some(Commands::Config { action }) => config_cmd(action)?,
         Some(Commands::Provider { action }) => provider_cmd(action)?,
         Some(Commands::Quota { provider, json }) => quota_cmd(provider, json)?,

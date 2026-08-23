@@ -2,11 +2,60 @@
 //!
 //! Dialogs hold their own field state and return a value only when the user
 //! confirms, so the app never has to reach into half-typed input.
+//!
+//! ImGui popup modals need `open_popup` exactly once, on the first frame the
+//! dialog is shown, and `begin_modal_popup` every frame after that; the token
+//! returning `None` means the popup is closed. [`ModalState`] keeps that
+//! bookkeeping out of the individual dialogs.
 
-use eframe::egui;
+use dear_imgui_rs::popup::ModalPopupToken;
+use dear_imgui_rs::{Condition, Ui};
 use rolen_core::types::{ProviderType, QuestionMode};
 
 use crate::jobs::{ConfigForm, ProviderForm};
+
+/// open-popup-once / begin-every-frame bookkeeping for a modal.
+#[derive(Default)]
+pub struct ModalState {
+    open: bool,
+    pending_open: bool,
+}
+
+impl ModalState {
+    pub fn open(&mut self) {
+        self.open = true;
+        self.pending_open = true;
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.pending_open = false;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Start the modal for this frame. `None` means "not open" - either the
+    /// dialog was never opened or the popup has been closed and the dialog
+    /// state has been reset.
+    pub fn begin<'ui>(&mut self, ui: &'ui Ui, id: &str) -> Option<ModalPopupToken<'ui>> {
+        if !self.open {
+            return None;
+        }
+        if self.pending_open {
+            ui.open_popup(id);
+            self.pending_open = false;
+        }
+        match ui.begin_modal_popup(id) {
+            Some(token) => Some(token),
+            None => {
+                self.open = false;
+                None
+            }
+        }
+    }
+}
 
 /// What the Add Provider dialog wants done next.
 pub enum ProviderRequest {
@@ -17,7 +66,7 @@ pub enum ProviderRequest {
 /// `Providers > Add Provider`.
 #[derive(Default)]
 pub struct AddProviderDialog {
-    open: bool,
+    modal: ModalState,
     form: ProviderForm,
     error: Option<String>,
     note: Option<String>,
@@ -26,24 +75,22 @@ pub struct AddProviderDialog {
 
 impl AddProviderDialog {
     pub fn open(&mut self) {
-        *self = Self {
-            open: true,
-            ..Default::default()
-        };
+        *self = Self::default();
+        self.modal.open();
     }
 
     /// Open pre-filled to edit an existing provider. The key is never shown -
     /// it lives in the keychain and cannot be read back into the form.
     pub fn edit(&mut self, form: ProviderForm) {
         *self = Self {
-            open: true,
             form,
             ..Default::default()
         };
+        self.modal.open();
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.modal.is_open()
     }
 
     pub fn set_busy(&mut self, busy: bool) {
@@ -65,159 +112,150 @@ impl AddProviderDialog {
     }
 
     pub fn close(&mut self) {
-        self.open = false;
+        self.modal.close();
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<ProviderRequest> {
-        if !self.open {
-            return None;
-        }
+    pub fn show(&mut self, ui: &Ui) -> Option<ProviderRequest> {
         let mut request = None;
-        let mut close = false;
+        let _modal = self.modal.begin(ui, "Add provider")?;
+        // The form is dense; give it room instead of imgui's auto-size.
+        ui.set_window_size_with_cond([600.0, 0.0], Condition::FirstUseEver);
 
-        let response = egui::Modal::new(egui::Id::new("add-provider-modal")).show(ctx, |ui| {
-            ui.set_width(560.0);
-            ui.heading("Add provider");
-            ui.add_space(8.0);
+        ui.text("Id");
+        ui.same_line();
+        ui.set_cursor_pos_x(LABEL_COL);
+        ui.set_next_item_width(FIELD_W);
+        ui.input_text("##provider-id", &mut self.form.id)
+            .hint("unique, e.g. kimi or ollama-local")
+            .build();
 
-            egui::Grid::new("add-provider-fields")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Id");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.id)
-                            .desired_width(360.0)
-                            .hint_text("unique, e.g. kimi or ollama-local"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Type");
-                    egui::ComboBox::from_id_salt("provider-type")
-                        .selected_text(type_label(self.form.ptype))
-                        .show_ui(ui, |ui| {
-                            for t in [
-                                ProviderType::Api,
-                                ProviderType::Cli,
-                                ProviderType::OllamaLocal,
-                                ProviderType::OllamaCloud,
-                                ProviderType::OllamaRemote,
-                            ] {
-                                if ui
-                                    .selectable_value(&mut self.form.ptype, t, type_label(t))
-                                    .clicked()
-                                {
-                                    // Ollama's bases are known, so offer them
-                                    // instead of making the user recall a URL.
-                                    if self.form.endpoint.trim().is_empty() {
-                                        self.form.endpoint = match t {
-                                            ProviderType::OllamaLocal => {
-                                                rolen_providers::ollama::DEFAULT_LOCAL_BASE.into()
-                                            }
-                                            ProviderType::OllamaCloud => {
-                                                rolen_providers::ollama::DEFAULT_CLOUD_BASE.into()
-                                            }
-                                            _ => String::new(),
-                                        };
-                                    }
-                                }
-                            }
-                        });
-                    ui.end_row();
-
-                    if self.form.ptype == ProviderType::Cli {
-                        ui.label("CLI path");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form.cli_path)
-                                .desired_width(360.0)
-                                .hint_text("full path to the agent binary"),
-                        );
-                        ui.end_row();
-                    } else {
-                        ui.label("Endpoint");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form.endpoint)
-                                .desired_width(360.0)
-                                .hint_text("https://api.example.com/v1"),
-                        );
-                        ui.end_row();
-
-                        ui.label("API key");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form.key)
-                                .desired_width(360.0)
-                                .password(true)
-                                .hint_text("stored in the OS keychain, never in providers.toml"),
-                        );
-                        ui.end_row();
-                    }
-
-                    ui.label("Models");
-                    if self.form.models.is_empty() {
-                        ui.weak("none yet - Discover asks the endpoint");
-                    } else {
-                        ui.label(format!("{} discovered", self.form.models.len()));
-                    }
-                    ui.end_row();
-                });
-
-            if let Some(note) = &self.note {
-                ui.add_space(6.0);
-                ui.weak(note);
-            }
-            if let Some(err) = &self.error {
-                ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
-            }
-
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let can_discover = self.form.ptype != ProviderType::Cli && !self.busy;
+        ui.text("Type");
+        ui.same_line();
+        ui.set_cursor_pos_x(LABEL_COL);
+        ui.set_next_item_width(FIELD_W);
+        let mut picked_type = None;
+        if let Some(combo) = ui.begin_combo("##provider-type", type_label(self.form.ptype)) {
+            for t in [
+                ProviderType::Api,
+                ProviderType::Cli,
+                ProviderType::OllamaLocal,
+                ProviderType::OllamaCloud,
+                ProviderType::OllamaRemote,
+            ] {
                 if ui
-                    .add_enabled(can_discover, egui::Button::new("Discover models"))
-                    .on_disabled_hover_text(if self.form.ptype == ProviderType::Cli {
-                        "a CLI agent has no /models endpoint"
-                    } else {
-                        "already working"
-                    })
-                    .clicked()
+                    .selectable_config(type_label(t))
+                    .selected(self.form.ptype == t)
+                    .build()
                 {
-                    match validate_provider(&self.form) {
-                        Some(err) => self.error = Some(err),
-                        None => {
-                            self.error = None;
-                            self.busy = true;
-                            request = Some(ProviderRequest::Discover(self.form.clone()));
-                        }
-                    }
+                    picked_type = Some(t);
                 }
-
-                if ui
-                    .add_enabled(!self.busy, egui::Button::new("Save"))
-                    .clicked()
-                {
-                    match validate_provider(&self.form) {
-                        Some(err) => self.error = Some(err),
-                        None => {
-                            self.error = None;
-                            self.busy = true;
-                            request = Some(ProviderRequest::Save(self.form.clone()));
-                        }
-                    }
-                }
-
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-                if self.busy {
-                    ui.spinner();
-                }
-            });
-        });
-
-        if close || response.should_close() {
-            self.open = false;
+            }
+            combo.end();
         }
+        if let Some(t) = picked_type {
+            self.form.ptype = t;
+            // Ollama's bases are known, so offer them instead of making the
+            // user recall a URL.
+            if self.form.endpoint.trim().is_empty() {
+                self.form.endpoint = match t {
+                    ProviderType::OllamaLocal => rolen_providers::ollama::DEFAULT_LOCAL_BASE.into(),
+                    ProviderType::OllamaCloud => rolen_providers::ollama::DEFAULT_CLOUD_BASE.into(),
+                    _ => String::new(),
+                };
+            }
+        }
+
+        if self.form.ptype == ProviderType::Cli {
+            ui.text("CLI path");
+            ui.same_line();
+            ui.set_cursor_pos_x(LABEL_COL);
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##provider-cli-path", &mut self.form.cli_path)
+                .hint("full path to the agent binary")
+                .build();
+        } else {
+            ui.text("Endpoint");
+            ui.same_line();
+            ui.set_cursor_pos_x(LABEL_COL);
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##provider-endpoint", &mut self.form.endpoint)
+                .hint("https://api.example.com/v1")
+                .build();
+
+            ui.text("API key");
+            ui.same_line();
+            ui.set_cursor_pos_x(LABEL_COL);
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##provider-key", &mut self.form.key)
+                .password(true)
+                .hint("stored in the OS keychain, never in providers.toml")
+                .build();
+        }
+
+        ui.text("Models");
+        ui.same_line();
+        ui.set_cursor_pos_x(LABEL_COL);
+        if self.form.models.is_empty() {
+            ui.text_disabled("none yet - Discover asks the endpoint");
+        } else {
+            ui.text(format!("{} discovered", self.form.models.len()));
+        }
+
+        if let Some(note) = &self.note {
+            ui.spacing();
+            ui.text_disabled(note);
+        }
+        if let Some(err) = &self.error {
+            ui.spacing();
+            ui.text_colored(ERROR, err);
+        }
+
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
+        let is_cli = self.form.ptype == ProviderType::Cli;
+        ui.with_disabled_if(is_cli || self.busy, || {
+            if ui.button("Discover models") {
+                match validate_provider(&self.form) {
+                    Some(err) => self.error = Some(err),
+                    None => {
+                        self.error = None;
+                        self.busy = true;
+                        request = Some(ProviderRequest::Discover(self.form.clone()));
+                    }
+                }
+            }
+        });
+        if is_cli
+            && ui.is_item_hovered_with_flags(dear_imgui_rs::ItemHoveredFlags::ALLOW_WHEN_DISABLED)
+        {
+            ui.tooltip_text("a CLI agent has no /models endpoint");
+        }
+        ui.same_line();
+
+        ui.with_disabled_if(self.busy, || {
+            if ui.button("Save") {
+                match validate_provider(&self.form) {
+                    Some(err) => self.error = Some(err),
+                    None => {
+                        self.error = None;
+                        self.busy = true;
+                        request = Some(ProviderRequest::Save(self.form.clone()));
+                    }
+                }
+            }
+        });
+        ui.same_line();
+
+        if ui.button("Cancel") {
+            ui.close_current_popup();
+        }
+        if self.busy {
+            ui.same_line();
+            ui.text_disabled("working...");
+        }
+
         request
     }
 }
@@ -262,14 +300,33 @@ fn type_label(t: ProviderType) -> &'static str {
     }
 }
 
+/// Shared form geometry: label column offset and field width.
+const LABEL_COL: f32 = 130.0;
+const FIELD_W: f32 = 420.0;
+
+/// Error red, as `[r, g, b, a]` floats.
+pub const ERROR: [f32; 4] = [0.78, 0.16, 0.16, 1.0];
+/// Success green.
+pub const OK: [f32; 4] = [0.18, 0.49, 0.20, 1.0];
+/// Link-ish blue, for "you" in chat.
+pub const ACCENT: [f32; 4] = [0.08, 0.40, 0.75, 1.0];
+
+/// A label row followed by a field, used by every dialog form.
+pub fn form_row(ui: &Ui, label: &str, field: impl FnOnce()) {
+    ui.text(label);
+    ui.same_line();
+    ui.set_cursor_pos_x(LABEL_COL);
+    field();
+}
+
 /// `Tools > Settings`.
 ///
-/// Numeric fields are drag/spin controls rather than free text: the TUI parses
-/// them with `parse()` and silently keeps the old value when parsing fails
+/// Numeric fields are sliders rather than free text: the TUI parses them with
+/// `parse()` and silently keeps the old value when parsing fails
 /// (`rolen-tui/src/settings.rs:160`), so a typo looks like it saved.
 #[derive(Default)]
 pub struct SettingsDialog {
-    open: bool,
+    modal: ModalState,
     form: Option<ConfigForm>,
     error: Option<String>,
 }
@@ -279,110 +336,115 @@ impl SettingsDialog {
     pub fn populate(&mut self, form: ConfigForm) {
         self.form = Some(form);
         self.error = None;
-        self.open = true;
+        self.modal.open();
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.modal.is_open()
     }
 
     pub fn close(&mut self) {
-        self.open = false;
+        self.modal.close();
     }
 
     /// Returns the form when Save is pressed and validation passes.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<ConfigForm> {
-        if !self.open {
-            return None;
-        }
-        let form = self.form.as_mut()?;
+    pub fn show(&mut self, ui: &Ui) -> Option<ConfigForm> {
+        self.form.as_ref()?;
         let mut result = None;
-        let mut close = false;
+        let _modal = self.modal.begin(ui, "Settings")?;
+        ui.set_window_size_with_cond([600.0, 0.0], Condition::FirstUseEver);
+        // Both guards above proved the form exists.
+        let form = self.form.as_mut()?;
 
-        let response = egui::Modal::new(egui::Id::new("settings-modal")).show(ctx, |ui| {
-            ui.set_width(520.0);
-            ui.heading("Settings");
-            ui.add_space(8.0);
-
-            egui::Grid::new("settings-fields")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Workspace root");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.workspace_root).desired_width(360.0),
-                    );
-                    ui.end_row();
-
-                    ui.label("Question mode");
-                    egui::ComboBox::from_id_salt("question-mode")
-                        .selected_text(mode_label(form.question_mode))
-                        .show_ui(ui, |ui| {
-                            for mode in [
-                                QuestionMode::Thorough,
-                                QuestionMode::Balanced,
-                                QuestionMode::Minimal,
-                            ] {
-                                ui.selectable_value(
-                                    &mut form.question_mode,
-                                    mode,
-                                    mode_label(mode),
-                                );
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Global parallelism cap");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut form.global_cap).range(0..=64));
-                        ui.weak("0 = automatic (half the logical CPUs, min 2)");
-                    });
-                    ui.end_row();
-
-                    ui.label("Per-provider cap");
-                    ui.add(egui::DragValue::new(&mut form.per_provider_cap).range(1..=64));
-                    ui.end_row();
-
-                    ui.label("Quota warn %");
-                    ui.add(egui::DragValue::new(&mut form.warn_pct).range(0..=100));
-                    ui.end_row();
-
-                    ui.label("Quota critical %");
-                    ui.add(egui::DragValue::new(&mut form.crit_pct).range(0..=100));
-                    ui.end_row();
-                });
-
-            ui.add_space(6.0);
-            ui.weak(
-                "The TUI colour theme and the quota alert action are stored in the same file \
-                 and are left untouched by this form.",
-            );
-
-            if let Some(err) = &self.error {
-                ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
-            }
-
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
-                    match validate_thresholds(form.warn_pct, form.crit_pct) {
-                        Some(err) => self.error = Some(err),
-                        None => {
-                            result = Some(form.clone());
-                            close = true;
-                        }
-                    }
-                }
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-            });
+        form_row(ui, "Workspace root", || {
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##workspace-root", &mut form.workspace_root)
+                .build();
         });
 
-        if close || response.should_close() {
-            self.open = false;
+        form_row(ui, "Question mode", || {
+            ui.set_next_item_width(FIELD_W);
+            if let Some(combo) = ui.begin_combo("##question-mode", mode_label(form.question_mode)) {
+                for mode in [
+                    QuestionMode::Thorough,
+                    QuestionMode::Balanced,
+                    QuestionMode::Minimal,
+                ] {
+                    if ui
+                        .selectable_config(mode_label(mode))
+                        .selected(form.question_mode == mode)
+                        .build()
+                    {
+                        form.question_mode = mode;
+                    }
+                }
+                combo.end();
+            }
+        });
+
+        let mut global_cap = form.global_cap as i32;
+        form_row(ui, "Global cap", || {
+            ui.set_next_item_width(FIELD_W);
+            if ui.slider_i32("##global-cap", &mut global_cap, 0, 64) {
+                form.global_cap = global_cap as usize;
+            }
+        });
+        ui.same_line();
+        ui.text_disabled("0 = automatic (half the logical CPUs, min 2)");
+
+        let mut per_provider_cap = form.per_provider_cap as i32;
+        form_row(ui, "Per-provider cap", || {
+            ui.set_next_item_width(FIELD_W);
+            if ui.slider_i32("##per-provider-cap", &mut per_provider_cap, 1, 64) {
+                form.per_provider_cap = per_provider_cap as usize;
+            }
+        });
+
+        let mut warn_pct = form.warn_pct as i32;
+        form_row(ui, "Quota warn %", || {
+            ui.set_next_item_width(FIELD_W);
+            if ui.slider_i32("##warn-pct", &mut warn_pct, 0, 100) {
+                form.warn_pct = warn_pct as u8;
+            }
+        });
+
+        let mut crit_pct = form.crit_pct as i32;
+        form_row(ui, "Quota critical %", || {
+            ui.set_next_item_width(FIELD_W);
+            if ui.slider_i32("##crit-pct", &mut crit_pct, 0, 100) {
+                form.crit_pct = crit_pct as u8;
+            }
+        });
+
+        ui.spacing();
+        ui.text_disabled(
+            "The TUI colour theme and the quota alert action are stored in the same file \
+             and are left untouched by this form.",
+        );
+
+        if let Some(err) = &self.error {
+            ui.spacing();
+            ui.text_colored(ERROR, err);
         }
+
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
+        if ui.button("Save") {
+            match validate_thresholds(form.warn_pct, form.crit_pct) {
+                Some(err) => self.error = Some(err),
+                None => {
+                    result = Some(form.clone());
+                    ui.close_current_popup();
+                }
+            }
+        }
+        ui.same_line();
+        if ui.button("Cancel") {
+            ui.close_current_popup();
+        }
+
         result
     }
 }
@@ -411,7 +473,7 @@ fn mode_label(mode: QuestionMode) -> &'static str {
 /// `Sessions > Run CLI Task`.
 #[derive(Default)]
 pub struct CliTaskDialog {
-    open: bool,
+    modal: ModalState,
     pub provider: Option<String>,
     task: String,
     workdir: String,
@@ -429,99 +491,91 @@ impl CliTaskDialog {
     /// `providers` is the list of registered `cli` provider ids.
     pub fn open(&mut self, providers: &[String], default_workdir: String) {
         *self = Self {
-            open: true,
             provider: providers.first().cloned(),
             workdir: default_workdir,
             ..Default::default()
         };
+        self.modal.open();
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.modal.is_open()
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, providers: &[String]) -> Option<CliTaskRequest> {
-        if !self.open {
-            return None;
-        }
+    pub fn show(&mut self, ui: &Ui, providers: &[String]) -> Option<CliTaskRequest> {
         let mut request = None;
-        let mut close = false;
+        let _modal = self.modal.begin(ui, "Run CLI task")?;
+        ui.set_window_size_with_cond([620.0, 0.0], Condition::FirstUseEver);
 
-        let response = egui::Modal::new(egui::Id::new("cli-task-modal")).show(ctx, |ui| {
-            ui.set_width(560.0);
-            ui.heading("Run CLI task");
-            ui.add_space(8.0);
+        if providers.is_empty() {
+            ui.text_colored(ERROR, "No cli providers are registered with a binary path.");
+        }
 
-            if providers.is_empty() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(0xc6, 0x28, 0x28),
-                    "No cli providers are registered with a binary path.",
-                );
-            }
-
-            egui::Grid::new("cli-task-fields")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Agent");
-                    egui::ComboBox::from_id_salt("cli-task-provider")
-                        .selected_text(self.provider.clone().unwrap_or_else(|| "-".into()))
-                        .show_ui(ui, |ui| {
-                            for id in providers {
-                                ui.selectable_value(&mut self.provider, Some(id.clone()), id);
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Working directory");
-                    ui.add(egui::TextEdit::singleline(&mut self.workdir).desired_width(380.0));
-                    ui.end_row();
-
-                    ui.label("Task");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.task)
-                            .desired_width(380.0)
-                            .desired_rows(4)
-                            .hint_text("what the agent should do"),
-                    );
-                    ui.end_row();
-                });
-
-            ui.add_space(6.0);
-            ui.weak(
-                "The workspace is copied to a staging directory, the agent runs there, and its \
-                 changes come back through the write queue.",
-            );
-
-            if let Some(err) = &self.error {
-                ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
-            }
-
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Run").clicked() {
-                    match self.validate() {
-                        Some(err) => self.error = Some(err),
-                        None => {
-                            request = Some(CliTaskRequest {
-                                provider: self.provider.clone().unwrap_or_default(),
-                                task: self.task.trim().to_string(),
-                                workdir: std::path::PathBuf::from(self.workdir.trim()),
-                            });
-                            close = true;
-                        }
+        form_row(ui, "Agent", || {
+            ui.set_next_item_width(FIELD_W);
+            let preview = self.provider.clone().unwrap_or_else(|| "-".into());
+            if let Some(combo) = ui.begin_combo("##cli-task-provider", preview) {
+                for id in providers {
+                    if ui
+                        .selectable_config(id)
+                        .selected(self.provider.as_deref() == Some(id))
+                        .build()
+                    {
+                        self.provider = Some(id.clone());
                     }
                 }
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-            });
+                combo.end();
+            }
         });
 
-        if close || response.should_close() {
-            self.open = false;
+        form_row(ui, "Working dir", || {
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##cli-task-workdir", &mut self.workdir)
+                .build();
+        });
+
+        ui.text("Task");
+        ui.set_next_item_width(FIELD_W);
+        ui.input_text_multiline(
+            "##cli-task-task",
+            &mut self.task,
+            [FIELD_W + LABEL_COL, 110.0],
+        )
+        .build();
+
+        ui.spacing();
+        ui.text_disabled(
+            "The workspace is copied to a staging directory, the agent runs there, and its \
+             changes come back through the write queue.",
+        );
+
+        if let Some(err) = &self.error {
+            ui.spacing();
+            ui.text_colored(ERROR, err);
         }
+
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
+        if ui.button("Run") {
+            match self.validate() {
+                Some(err) => self.error = Some(err),
+                None => {
+                    request = Some(CliTaskRequest {
+                        provider: self.provider.clone().unwrap_or_default(),
+                        task: self.task.trim().to_string(),
+                        workdir: std::path::PathBuf::from(self.workdir.trim()),
+                    });
+                    ui.close_current_popup();
+                }
+            }
+        }
+        ui.same_line();
+        if ui.button("Cancel") {
+            ui.close_current_popup();
+        }
+
         request
     }
 
@@ -547,7 +601,7 @@ impl CliTaskDialog {
 /// Fields for `File > New Project`.
 #[derive(Default)]
 pub struct NewProjectDialog {
-    open: bool,
+    modal: ModalState,
     name: String,
     description: String,
     stack: String,
@@ -564,92 +618,71 @@ pub struct NewProjectDraft {
 impl NewProjectDialog {
     /// Open with empty fields - a previous cancel must not leak into the next one.
     pub fn open(&mut self) {
-        *self = Self {
-            open: true,
-            ..Default::default()
-        };
+        *self = Self::default();
+        self.modal.open();
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.modal.is_open()
     }
 
     /// Draw the modal. Returns the draft only when Create was pressed and the
     /// name is non-empty.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<NewProjectDraft> {
-        if !self.open {
-            return None;
-        }
+    pub fn show(&mut self, ui: &Ui) -> Option<NewProjectDraft> {
         let mut result = None;
-        let response = egui::Modal::new(egui::Id::new("new-project-modal")).show(ctx, |ui| {
-            ui.set_width(420.0);
-            ui.heading("New project");
-            ui.add_space(8.0);
+        let _modal = self.modal.begin(ui, "New project")?;
+        ui.set_window_size_with_cond([560.0, 0.0], Condition::FirstUseEver);
 
-            egui::Grid::new("new-project-fields")
-                .num_columns(2)
-                .spacing([10.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Name");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.name)
-                            .desired_width(300.0)
-                            .hint_text("My Thing"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Description");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.description)
-                            .desired_width(300.0)
-                            .hint_text("one or two sentences"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Stack");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.stack)
-                            .desired_width(300.0)
-                            .hint_text("comma separated, e.g. rust,egui"),
-                    );
-                    ui.end_row();
-                });
-
-            if let Some(err) = &self.error {
-                ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(0xc6, 0x28, 0x28), err);
-            }
-
-            ui.add_space(6.0);
-            ui.weak(
-                "Creates the directory, writes rolen-project.yaml and runs git init. \
-                 The clarification interview is a separate step.",
-            );
-            ui.add_space(10.0);
-
-            ui.horizontal(|ui| {
-                if ui.button("Create").clicked() {
-                    if self.name.trim().is_empty() {
-                        self.error = Some("name is required".to_string());
-                    } else {
-                        result = Some(NewProjectDraft {
-                            name: self.name.trim().to_string(),
-                            description: self.description.trim().to_string(),
-                            stack: self.stack.trim().to_string(),
-                        });
-                        self.open = false;
-                    }
-                }
-                if ui.button("Cancel").clicked() {
-                    self.open = false;
-                }
-            });
+        form_row(ui, "Name", || {
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##project-name", &mut self.name)
+                .hint("My Thing")
+                .build();
+        });
+        form_row(ui, "Description", || {
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##project-description", &mut self.description)
+                .hint("one or two sentences")
+                .build();
+        });
+        form_row(ui, "Stack", || {
+            ui.set_next_item_width(FIELD_W);
+            ui.input_text("##project-stack", &mut self.stack)
+                .hint("comma separated, e.g. rust,imgui")
+                .build();
         });
 
-        // Backdrop click or Esc.
-        if response.should_close() {
-            self.open = false;
+        if let Some(err) = &self.error {
+            ui.spacing();
+            ui.text_colored(ERROR, err);
         }
+
+        ui.spacing();
+        ui.text_disabled(
+            "Creates the directory, writes rolen-project.yaml and runs git init. \
+             The clarification interview is a separate step.",
+        );
+        ui.spacing();
+        ui.separator();
+        ui.spacing();
+
+        if ui.button("Create") {
+            if self.name.trim().is_empty() {
+                self.error = Some("name is required".to_string());
+            } else {
+                result = Some(NewProjectDraft {
+                    name: self.name.trim().to_string(),
+                    description: self.description.trim().to_string(),
+                    stack: self.stack.trim().to_string(),
+                });
+                ui.close_current_popup();
+            }
+        }
+        ui.same_line();
+        if ui.button("Cancel") {
+            ui.close_current_popup();
+        }
+
         result
     }
 }
