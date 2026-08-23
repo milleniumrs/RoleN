@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 # Floor set by the dear-imgui-rs stack (MSRV 1.92). Declaring it makes cargo's
