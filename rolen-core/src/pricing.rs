@@ -13,7 +13,7 @@
 
 use crate::config;
 use crate::error::CoreError;
-use crate::types::ProviderType;
+use crate::types::{Billing, ProviderType};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -123,12 +123,21 @@ impl ModelPrice {
 }
 
 /// What RoleN can honestly say about one model's price.
+///
+/// The distinction that matters is between [`Price::Unknown`], where a rate
+/// exists and nobody has entered it, and [`Price::Plan`], where no per-token
+/// rate exists at all. Both cost 0.0 by default, but only the first is a gap
+/// somebody can close.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Price {
     /// Runs on hardware you already pay for; there is no per-token charge.
     Free,
     /// Metered, and rates have been entered.
     Known(Rates),
+    /// Billed by subscription: the provider publishes no per-token rate and
+    /// meters an allowance instead. Any rates here are the user's own
+    /// estimate for budgeting, not a quoted price, and are billed when set.
+    Plan(Option<Rates>),
     /// Metered, but nobody has told RoleN the rate. Cost is not estimated.
     Unknown,
 }
@@ -141,9 +150,9 @@ impl Price {
     /// [`Price::Unknown`] deliberately yields 0.0: guessing a rate would put
     /// invented money in the ledger.
     pub fn cost(self, t: Tokens) -> f64 {
-        match self {
-            Price::Free | Price::Unknown => 0.0,
-            Price::Known(r) => {
+        match self.rates() {
+            None => 0.0,
+            Some(r) => {
                 (t.fresh_input() as f64 * r.input
                     + t.cache_read.min(t.input) as f64 * r.read_rate()
                     + t.cache_write_5m.min(t.input) as f64 * r.write_5m_rate()
@@ -154,9 +163,24 @@ impl Price {
         }
     }
 
-    /// True when a call through this model can be costed at all.
+    /// The rates to bill at, if there are any.
+    pub fn rates(self) -> Option<Rates> {
+        match self {
+            Price::Known(r) | Price::Plan(Some(r)) => Some(r),
+            Price::Free | Price::Plan(None) | Price::Unknown => None,
+        }
+    }
+
+    /// True when RoleN can account for a call: it has a rate, or it knows
+    /// there is nothing to charge. Only [`Price::Unknown`] is a real gap.
     pub fn is_known(self) -> bool {
         !matches!(self, Price::Unknown)
+    }
+
+    /// True when the rates are the user's own guess rather than a quoted
+    /// price, so the UI can mark the numbers as approximate.
+    pub fn is_estimate(self) -> bool {
+        matches!(self, Price::Plan(Some(_)))
     }
 
     pub fn input_label(self) -> String {
@@ -176,11 +200,13 @@ impl Price {
     /// The two cache-write rates as one cell, "6.25/10.00" style, since they
     /// are only ever interesting next to each other.
     pub fn cache_write_label(self) -> String {
-        match self {
-            Price::Free => "free".to_string(),
-            Price::Unknown => "unknown".to_string(),
-            Price::Known(r) => format!(
-                "{}/{}",
+        match (self, self.rates()) {
+            (Price::Free, _) => "free".to_string(),
+            (Price::Plan(None), _) => "plan".to_string(),
+            (_, None) => "unknown".to_string(),
+            (_, Some(r)) => format!(
+                "{}{}/{}",
+                if self.is_estimate() { "~" } else { "" },
                 fmt_rate(r.write_5m_rate()),
                 fmt_rate(r.write_1h_rate())
             ),
@@ -188,10 +214,19 @@ impl Price {
     }
 
     fn label(self, pick: fn(Rates) -> f64) -> String {
-        match self {
-            Price::Free => "free".to_string(),
-            Price::Unknown => "unknown".to_string(),
-            Price::Known(r) => format!("${}", fmt_rate(pick(r))),
+        match (self, self.rates()) {
+            (Price::Free, _) => "free".to_string(),
+            // No per-token rate exists, so there is nothing to show and
+            // nothing anyone could enter to make it appear.
+            (Price::Plan(None), _) => "plan".to_string(),
+            (_, None) => "unknown".to_string(),
+            // A tilde marks a number the user estimated, not one a vendor
+            // published.
+            (_, Some(r)) => format!(
+                "{}${}",
+                if self.is_estimate() { "~" } else { "" },
+                fmt_rate(pick(r))
+            ),
         }
     }
 }
@@ -293,16 +328,18 @@ impl Pricing {
 
     /// What to show, and charge, for one model.
     ///
-    /// An unmetered provider is [`Price::Free`] even if a rate was entered:
-    /// the hardware is yours either way, and a stray entry must not start
-    /// billing a local model.
+    /// A free provider is [`Price::Free`] even if a rate was entered: the
+    /// hardware is yours either way, and a stray entry must not start billing
+    /// a local model.
     pub fn resolve(&self, ptype: ProviderType, provider_id: &str, model_id: &str) -> Price {
-        if !ptype.is_metered() {
-            return Price::Free;
-        }
-        match self.get(provider_id, model_id) {
-            Some(e) => Price::Known(e.rates()),
-            None => Price::Unknown,
+        let entered = || self.get(provider_id, model_id).map(|e| e.rates());
+        match ptype.billing() {
+            Billing::Free => Price::Free,
+            Billing::Subscription => Price::Plan(entered()),
+            Billing::PerToken => match entered() {
+                Some(r) => Price::Known(r),
+                None => Price::Unknown,
+            },
         }
     }
 
@@ -333,15 +370,74 @@ mod tests {
     }
 
     #[test]
-    fn ollama_cloud_is_metered_like_any_api() {
+    fn a_subscription_provider_is_on_a_plan_not_unknown() {
+        // "unknown" means a rate exists and nobody entered it. A wrapped CLI
+        // agent and Ollama Cloud publish no per-token rate at all, so there is
+        // nothing anyone could enter to resolve it.
         let p = Pricing::default();
-        assert_eq!(
-            p.resolve(ProviderType::OllamaCloud, "ollama-cloud", "kimi-k2"),
-            Price::Unknown
-        );
+        for t in [ProviderType::Cli, ProviderType::OllamaCloud] {
+            let price = p.resolve(t, "cli-claude", "claude-sonnet-5");
+            assert_eq!(price, Price::Plan(None), "{t:?}");
+            assert_eq!(price.input_label(), "plan");
+            assert_eq!(price.cache_write_label(), "plan");
+            // Costed as zero, but not because the rate is missing.
+            assert_eq!(price.cost(prompt(1_000_000, 1_000_000)), 0.0);
+            assert!(price.is_known());
+            assert!(!price.is_estimate());
+        }
+    }
+
+    #[test]
+    fn an_estimate_on_a_plan_provider_is_billed_and_marked() {
+        let mut p = Pricing::default();
+        p.set("cli-claude", "claude-sonnet-5", Rates::flat(2.0, 10.0));
+        let price = p.resolve(ProviderType::Cli, "cli-claude", "claude-sonnet-5");
+        assert_eq!(price, Price::Plan(Some(Rates::flat(2.0, 10.0))));
+        assert!(price.is_estimate());
+        // The tilde is what tells the user this is their guess, not a quote.
+        assert_eq!(price.input_label(), "~$2.00");
+        assert_eq!(price.output_label(), "~$10.00");
+        assert_eq!(price.cost(prompt(1_000_000, 0)), 2.0);
+    }
+
+    #[test]
+    fn a_per_token_rate_is_not_marked_as_an_estimate() {
+        assert!(!k3().is_estimate());
+        assert_eq!(k3().input_label(), "$3.00");
+    }
+
+    #[test]
+    fn only_unknown_is_a_gap_somebody_can_close() {
+        assert!(Price::Free.is_known());
+        assert!(Price::Plan(None).is_known());
+        assert!(k3().is_known());
+        assert!(!Price::Unknown.is_known());
+    }
+
+    #[test]
+    fn an_api_provider_without_a_rate_is_unknown() {
+        // The one case where "unknown" is right: a metered API whose rate is
+        // published somewhere, just not entered here yet.
+        let p = Pricing::default();
         assert_eq!(
             p.resolve(ProviderType::Api, "kimi", "kimi-for-coding"),
             Price::Unknown
+        );
+        assert_eq!(
+            p.resolve(ProviderType::Api, "kimi", "x").input_label(),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn ollama_cloud_is_not_metered_like_an_api() {
+        // It sells a subscription against an opaque compute allowance and
+        // publishes no per-token rate, so it must not be reported as a
+        // metered provider with a missing number.
+        let p = Pricing::default();
+        assert_eq!(
+            p.resolve(ProviderType::OllamaCloud, "ollama-cloud", "gpt-oss:20b"),
+            Price::Plan(None)
         );
     }
 

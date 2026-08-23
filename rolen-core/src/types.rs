@@ -17,14 +17,35 @@ pub enum ProviderType {
     OllamaRemote,
 }
 
+/// How a provider charges, which decides what a price even means for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Billing {
+    /// Runs on hardware you already pay for. No per-token charge.
+    Free,
+    /// Charged per token at a published rate.
+    PerToken,
+    /// A subscription or plan allowance. No per-token rate exists to look up:
+    /// spend is the monthly fee, and the binding constraint is the allowance,
+    /// not the price of any one call.
+    Subscription,
+}
+
 impl ProviderType {
-    /// Whether tokens through this provider are charged per token.
+    /// How this kind of provider charges.
     ///
     /// A local Ollama server, and one reached over an SSH tunnel, both run on
-    /// hardware you are already paying for, so there is no per-token price to
-    /// know. Ollama's hosted cloud bills like any other API.
-    pub fn is_metered(self) -> bool {
-        !matches!(self, Self::OllamaLocal | Self::OllamaRemote)
+    /// your own hardware, so there is nothing to bill per token.
+    ///
+    /// Ollama's hosted cloud and PTY-wrapped CLI agents are subscriptions:
+    /// they publish no per-token rate, meter an opaque compute allowance, and
+    /// queue or refuse rather than bill once it is spent. That is a different
+    /// thing from a metered provider whose rate nobody has entered yet.
+    pub fn billing(self) -> Billing {
+        match self {
+            Self::OllamaLocal | Self::OllamaRemote => Billing::Free,
+            Self::Api => Billing::PerToken,
+            Self::Cli | Self::OllamaCloud => Billing::Subscription,
+        }
     }
 }
 
@@ -401,4 +422,28 @@ pub enum AlertAction {
     Notify,
     SwitchRule,
     PauseRole,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_your_own_hardware_is_free() {
+        assert_eq!(ProviderType::OllamaLocal.billing(), Billing::Free);
+        assert_eq!(ProviderType::OllamaRemote.billing(), Billing::Free);
+    }
+
+    #[test]
+    fn subscriptions_are_not_per_token_providers() {
+        // Neither publishes a per-token rate: a wrapped CLI agent bills its
+        // own subscription, and Ollama Cloud meters a compute allowance.
+        assert_eq!(ProviderType::Cli.billing(), Billing::Subscription);
+        assert_eq!(ProviderType::OllamaCloud.billing(), Billing::Subscription);
+    }
+
+    #[test]
+    fn a_plain_api_is_charged_per_token() {
+        assert_eq!(ProviderType::Api.billing(), Billing::PerToken);
+    }
 }
