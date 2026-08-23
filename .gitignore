@@ -17,10 +17,6 @@ target/
 # Local release packaging output
 dist/
 
-# Product requirement documents are kept locally, not published
-PRD.md
-PRD.json
-
 # LaTeX build artefacts (the generated PDF is committed)
 *.aux
 *.log

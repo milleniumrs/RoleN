@@ -92,7 +92,6 @@ pub fn get_secret(key_ref: &str) -> Result<String, CoreError> {
 
 pub fn delete_secret(key_ref: &str) -> Result<(), CoreError> {
     if forced_backend() != Some(Backend::Vault) {
-        // best effort on the keychain
         let _ = entry(key_ref).and_then(|e| e.delete_credential().map_err(CoreError::from));
     }
     if vault::is_available() {

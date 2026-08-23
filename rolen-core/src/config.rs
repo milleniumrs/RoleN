@@ -75,16 +75,17 @@ impl Parallelism {
     }
 }
 
-// ------------------------------------------------------------------- paths
+/// Append the application directory name to a platform base directory.
+fn app_dir(base: PathBuf) -> PathBuf {
+    base.join(APP_DIR)
+}
 
 pub fn config_dir() -> Result<PathBuf, CoreError> {
-    Ok(dirs::config_dir()
-        .ok_or(CoreError::NoConfigDir)?
-        .join(APP_DIR))
+    Ok(app_dir(dirs::config_dir().ok_or(CoreError::NoConfigDir)?))
 }
 
 pub fn data_dir() -> Result<PathBuf, CoreError> {
-    Ok(dirs::data_dir().ok_or(CoreError::NoDataDir)?.join(APP_DIR))
+    Ok(app_dir(dirs::data_dir().ok_or(CoreError::NoDataDir)?))
 }
 
 pub fn config_file() -> Result<PathBuf, CoreError> {
