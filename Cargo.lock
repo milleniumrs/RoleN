@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-cliadapters"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "age",
  "chrono",
@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-orchestrator"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "rolen-core",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-providers"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "reqwest",
@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "rolen-core",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "rolen-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "appcui",
