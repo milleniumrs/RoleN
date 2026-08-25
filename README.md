@@ -1,6 +1,6 @@
 # RoleN
 
-**Management layer for AI CLI tools and LLM API subscriptions**, built in Rust on [AppCUI](https://github.com/gdt050579/AppCUI-rs) (cross-platform TUI) and [Dear ImGui](https://github.com/Latias94/dear-imgui-rs) (desktop GUI) — plus a headless CLI.
+**Management layer for AI CLI tools and LLM API subscriptions**, built in Rust on [AppCUI](https://github.com/gdt050579/AppCUI-rs) (cross-platform TUI) — plus a headless CLI.
 
 RoleN lets a developer who owns **several LLM subscriptions and CLI tools** treat them as one orchestra: register every provider once, assign models to **roles** via quota-aware **rules**, split projects into **parallel agent tasks** that can never corrupt each other's files, and watch tokens, costs and quotas live.
 
@@ -43,8 +43,7 @@ Cargo workspace crates:
 | `rolen-runtime` | Built-in agent loop: sandboxed tools, ticket-only writes, compaction, retry + migration |
 | `rolen-orchestrator` | Global write queue, parallel DAG scheduler, git checkpoints, PRD→DAG generation |
 | `rolen-cliadapters` | PTY wrapping of external CLI agents (portable-pty/ConPTY), overlay + harvest |
-| `rolen-tui` | AppCUI front-end: dashboard, providers, rules, projects, questions, quick chat, transcripts, settings |
-| `rolen-gui` | Dear ImGui desktop front-end, shipped as a standalone `rolen-gui` binary: poller-backed snapshot, worker-thread jobs, dashboard, providers, projects, rules, activity, chat |
+| `rolen-tui` | AppCUI front-end: dashboard, providers, rules, projects, questions, quick chat, live agent activity, transcripts, settings |
 | `rolen-cli` | The `rolen` binary: headless commands + TUI launcher |
 
 Key design guarantees:
@@ -67,23 +66,12 @@ CLI + TUI (`rolen`):
 | macOS | Apple Silicon | `rolen-<version>-macos-aarch64.tar.gz` |
 | macOS | Intel | `rolen-<version>-macos-x86_64.tar.gz` |
 
-Desktop GUI (`rolen-gui`, a separate application):
-
-| OS | Architecture | Asset |
-|---|---|---|
-| Windows | x86_64 | `rolen-gui-<version>-windows-x86_64.zip` |
-| Linux | x86_64 | `rolen-gui-<version>-linux-x86_64.tar.gz` |
-| macOS | Apple Silicon | `rolen-gui-<version>-macos-aarch64.tar.gz` |
-| macOS | Intel | `rolen-gui-<version>-macos-x86_64.tar.gz` |
-
-Each archive holds its binary, this README and the licence; the CLI archive also has the design PDF. `SHA256SUMS` is published alongside (`sha256sum -c SHA256SUMS`). Unpack anywhere on your `PATH` and run `rolen config doctor`.
+Each archive holds the binary, this README, the licence and the design PDF. `SHA256SUMS` is published alongside (`sha256sum -c SHA256SUMS`). Unpack anywhere on your `PATH` and run `rolen config doctor`.
 
 Releases are cut by pushing a tag — `git tag v0.1.0 && git push origin v0.1.0` — which triggers `.github/workflows/release.yml` to build every target and publish the assets.
 
 On Linux the TUI needs ncurses and X11 clipboard libraries at runtime:
 `sudo apt install libncurses6 libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0`
-The GUI additionally needs an X11 or Wayland session with OpenGL (any Mesa or
-vendor driver; the libraries are loaded at runtime, not at build time).
 
 ## Quick start
 
@@ -97,7 +85,6 @@ rolen rule init                    # seed routing rules from your providers
 rolen provider test --id kimi --model k3
 
 rolen                              # launch the TUI
-rolen-gui                          # launch the desktop window (separate binary: cargo run -p rolen-gui)
 
 # headless agent work
 rolen run --role coder --task "Create hello.md" --workdir ./scratch

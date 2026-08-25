@@ -49,20 +49,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `gui` marks the legs that also ship the desktop binary. Every
-          # native leg does; linux-aarch64 is the exception because it is the
-          # only cross-compiled Linux target and cimgui's C++ would need a
-          # cross toolchain for no demonstrated demand.
           - label: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
-            gui: true
           - label: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-            gui: true
           - label: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -71,7 +65,6 @@ jobs:
             os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-            gui: true
           # GitHub retired the macos-13 (Intel) image, so the x86_64 binary is
           # cross-compiled from the Apple Silicon runner instead of waiting
           # forever for an Intel runner that will never be assigned.
@@ -79,7 +72,6 @@ jobs:
             os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
-            gui: true
 
     steps:
       # without an explicit ref a manual run builds the default branch and
@@ -96,24 +88,18 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # AppCUI needs ncurses + X11 clipboard libraries on Linux; the GUI's
-      # winit backend adds xkbcommon and wayland. No mesa dev packages: glutin
-      # loads GL through dlopen at runtime, so the headers are never needed.
+      # AppCUI needs ncurses + the X11 clipboard libraries on Linux. The
+      # xkbcommon and wayland packages went with the GUI's winit backend.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libncurses-dev libxcb1-dev libxcb-render0-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libwayland-dev
+            libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: Build the CLI
         run: cargo build --release --locked --target ${{ matrix.target }} -p rolen-cli
-
-      - name: Build the GUI
-        if: matrix.gui
-        run: cargo build --release --locked --target ${{ matrix.target }} -p rolen-gui
 
       - name: Package
         shell: bash
@@ -140,14 +126,6 @@ jobs:
           cp README.md LICENSE "dist/${cli}/"
           cp docs/TUI-DESIGN.pdf "dist/${cli}/" || true
           archive "${cli}"
-
-          if [ "${{ matrix.gui }}" = "true" ]; then
-            gui="${BIN}-gui-${VERSION}-${{ matrix.label }}"
-            mkdir -p "dist/${gui}"
-            cp "target/${{ matrix.target }}/release/${BIN}-gui${ext}" "dist/${gui}/"
-            cp README.md LICENSE "dist/${gui}/"
-            archive "${gui}"
-          fi
 
           ls -l dist
 
@@ -197,15 +175,6 @@ jobs:
             | macOS | Apple Silicon | `rolen-${{ env.VERSION }}-macos-aarch64.tar.gz` |
             | macOS | Intel | `rolen-${{ env.VERSION }}-macos-x86_64.tar.gz` |
 
-            Desktop GUI — the separate `rolen-gui` application:
-
-            | OS | Architecture | File |
-            |---|---|---|
-            | Windows | x86_64 | `rolen-gui-${{ env.VERSION }}-windows-x86_64.zip` |
-            | Linux | x86_64 | `rolen-gui-${{ env.VERSION }}-linux-x86_64.tar.gz` |
-            | macOS | Apple Silicon | `rolen-gui-${{ env.VERSION }}-macos-aarch64.tar.gz` |
-            | macOS | Intel | `rolen-gui-${{ env.VERSION }}-macos-x86_64.tar.gz` |
-
             Verify with `sha256sum -c SHA256SUMS`.
 
             ### Quick start
@@ -213,7 +182,6 @@ jobs:
             rolen config doctor          # verify the environment
             rolen provider detect --register
             rolen                        # launch the TUI
-            rolen-gui                    # launch the desktop window
             ```
           files: |
             dist/*.zip

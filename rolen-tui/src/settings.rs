@@ -4,7 +4,7 @@
 
 use appcui::prelude::*;
 use rolen_core::config::Config;
-use rolen_core::types::{AlertAction, QuestionMode};
+use rolen_core::types::QuestionMode;
 
 #[ModalWindow(events = ButtonEvents)]
 pub struct SettingsWindow {
@@ -172,7 +172,9 @@ impl SettingsWindow {
             self.set_status("warn % must be below critical %");
             return;
         }
-        cfg.quotas.action = AlertAction::Notify;
+        // `quotas.action` is deliberately left as it was loaded. This form has
+        // no control for it, and overwriting it with Notify silently discarded
+        // a `switch-rule` or `pause-role` setting on every save.
         match cfg.save() {
             Ok(()) => {
                 // colour theme takes effect without a restart
