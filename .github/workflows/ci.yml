@@ -31,12 +31,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux; the GUI's
-      # winit backend adds xkbcommon and wayland on top.
-      #
-      # No mesa dev packages: glutin loads GL through dlopen at runtime, so the
-      # headers are not needed to build, and libgl1-mesa-dev alone pulled in 19
-      # extra packages including the vulkan and vdpau drivers.
+      # AppCUI pulls in ncurses and the X11 clipboard stack on Linux. The
+      # xkbcommon, wayland and GL requirements left with the GUI's winit
+      # backend, so only these five remain.
       #
       # DEBIAN_FRONTEND and the lock timeout are here because this step has hung
       # twice waiting on a dpkg lock held by the runner's unattended-upgrades;
@@ -49,11 +46,10 @@ jobs:
           sudo apt-get -o DPkg::Lock::Timeout=180 update
           sudo apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends \
             libncurses-dev libxcb1-dev libxcb-render0-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libwayland-dev
+            libxcb-shape0-dev libxcb-xfixes0-dev
 
       - name: fmt (RoleN packages only — do not follow path deps)
-        run: cargo fmt -p rolen-core -p rolen-providers -p rolen-runtime -p rolen-orchestrator -p rolen-cliadapters -p rolen-tui -p rolen-gui -p rolen-cli -- --check
+        run: cargo fmt -p rolen-core -p rolen-providers -p rolen-runtime -p rolen-orchestrator -p rolen-cliadapters -p rolen-tui -p rolen-cli -- --check
 
       - name: clippy
         run: cargo clippy --workspace -- -D warnings

@@ -7,7 +7,6 @@ members = [
     "rolen-runtime",
     "rolen-cliadapters",
     "rolen-tui",
-    "rolen-gui",
     "rolen-cli",
 ]
 
@@ -15,9 +14,11 @@ members = [
 version = "0.2.0"
 edition = "2021"
 license = "MIT"
-# Floor set by the dear-imgui-rs stack (MSRV 1.92). Declaring it makes cargo's
-# resolver MSRV-aware, so a future `cargo update` cannot silently pull a
-# dependency that needs a newer compiler than the project claims to support.
+# Declaring this makes cargo's resolver MSRV-aware, so a future `cargo update`
+# cannot silently pull a dependency needing a newer compiler than the project
+# claims to support. The floor was set by the dear-imgui-rs stack, which left
+# with rolen-gui; it is almost certainly lowerable now, but lowering it is a
+# claim that wants testing against the real minimum rather than a guess.
 rust-version = "1.95"
 
 [workspace.dependencies]

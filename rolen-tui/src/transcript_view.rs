@@ -40,12 +40,17 @@ impl ButtonEvents for TranscriptView {
 }
 
 /// Strip CSI (`ESC [ ... letter`) and OSC (`ESC ] ... BEL/ESC\`) sequences.
+///
+/// Carriage returns are normalised too: `\r\n` is one line break, and a bare
+/// `\r` is a progress line rewriting itself in place - meaningless once the
+/// text has been flattened into a scrollback buffer, so it is dropped rather
+/// than shown as a stray glyph or an extra blank line.
 pub fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            match chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
                 Some('[') => {
                     // CSI: ends with a letter in @..~
                     for c in chars.by_ref() {
@@ -65,9 +70,14 @@ pub fn strip_ansi(input: &str) -> String {
                     }
                 }
                 _ => {}
+            },
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                    out.push('\n');
+                }
             }
-        } else {
-            out.push(c);
+            _ => out.push(c),
         }
     }
     out
@@ -81,5 +91,14 @@ mod tests {
     fn strips_csi_and_osc() {
         let raw = "\u{1b}[2J\u{1b}[Hhello \u{1b}[31mred\u{1b}[0m \u{1b}]0;title\u{7}done";
         assert_eq!(strip_ansi(raw), "hello red done");
+    }
+
+    /// A PTY writes CRLF, and a progress line rewrites itself with a bare CR.
+    /// Neither should reach the viewer as a literal control character.
+    #[test]
+    fn carriage_returns_are_normalised() {
+        assert_eq!(strip_ansi("one\r\ntwo"), "one\ntwo");
+        assert_eq!(strip_ansi("50%\r100%"), "50%100%");
+        assert_eq!(strip_ansi("trailing\r"), "trailing");
     }
 }

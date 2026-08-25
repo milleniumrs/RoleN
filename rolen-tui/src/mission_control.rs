@@ -83,8 +83,19 @@ struct QuestionRow {
     status: String,
 }
 
+/// Index of the Activity tab in the tab control built by [`MissionControl::new`].
+const ACTIVITY_TAB: usize = 5;
+
 /// Payload delivered by the background CLI-task worker.
 pub enum CliTaskMsg {
+    /// A chunk of live PTY output, roughly every 80 ms while the agent works.
+    Output(String),
+    /// The agent's edits reached the write queue.
+    Harvested {
+        applied: usize,
+        rejected: usize,
+        paths: usize,
+    },
     Finished(String),
 }
 
@@ -105,7 +116,26 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
             .get(&provider_id)
             .ok_or_else(|| anyhow::anyhow!("provider '{provider_id}' not found"))?
             .clone();
-        let report = rolen_cliadapters::run_cli_session(&p, &task, &workdir, None, &mut |_| {})?;
+        // The adapter streams stdout as it arrives; forwarding it to the
+        // window is what makes a long agent run watchable instead of a frozen
+        // "started in the background" message followed by silence.
+        let mut on_event = |event: rolen_cliadapters::CliEvent| match event {
+            rolen_cliadapters::CliEvent::Output(chunk) => {
+                conector.notify(CliTaskMsg::Output(chunk));
+            }
+            rolen_cliadapters::CliEvent::Harvested {
+                applied,
+                rejected,
+                paths,
+            } => {
+                conector.notify(CliTaskMsg::Harvested {
+                    applied,
+                    rejected,
+                    paths: paths.len(),
+                });
+            }
+        };
+        let report = rolen_cliadapters::run_cli_session(&p, &task, &workdir, None, &mut on_event)?;
         Ok(format!(
             "session {} — exit {:?}\nwrites via queue: {} applied / {} rejected\ntranscript: {}",
             report.session_id,
@@ -157,6 +187,12 @@ pub struct MissionControl {
     provider_ids: Vec<String>,
     // providers already alerted at critical level (one-shot, FR-4.5)
     alerted: std::collections::HashSet<String>,
+    // the tab control itself, so a starting CLI task can bring its own tab up
+    tabs: Handle<Tab>,
+    // activity tab: live output from the running CLI agent
+    ta_activity: Handle<TextArea>,
+    /// Live agent output, ANSI already stripped and capped.
+    cli_output: String,
     // events/commands
     bt_cli: Handle<BackgroundTask<CliTaskMsg, bool>>,
     // last health-check results, by provider id
@@ -190,6 +226,9 @@ impl MissionControl {
             question_refs: Vec::new(),
             provider_ids: Vec::new(),
             alerted: std::collections::HashSet::new(),
+            tabs: Handle::None,
+            ta_activity: Handle::None,
+            cli_output: String::new(),
             bt_cli: Handle::None,
             health: HashMap::new(),
         };
@@ -366,10 +405,17 @@ impl MissionControl {
         );
         t.add(4, label!("'Enter on a question to answer it — blocked tasks resume automatically',l:1,b:0,r:1"));
 
-        // Activity
-        t.add(5, label!("'Activity: ledger stream — tickets, rule decisions, quota events (M2+).',x:2,y:1,w:70"));
+        // Activity: live output from a wrapped CLI agent while it works.
+        t.add(
+            5,
+            label!("'Live agent output — Sessions ▸ Run CLI Task starts one.',l:1,t:0,r:1,h:1"),
+        );
+        w.ta_activity = t.add(
+            5,
+            textarea!("'',l:1,t:1,r:1,b:0,flags: [ReadOnly, ScrollBars]"),
+        );
 
-        w.add(t);
+        w.tabs = w.add(t);
         w
     }
 
@@ -851,8 +897,46 @@ impl MissionControl {
             task.trim().to_string(),
             workdir.trim().into(),
         ));
+        self.cli_output.clear();
+        self.append_cli_output(&format!(
+            "[rolen] starting {} in {}\n",
+            provider.trim(),
+            workdir.trim()
+        ));
+        self.show_activity_tab();
         self.bt_cli = BackgroundTask::<CliTaskMsg, bool>::run(cli_task_worker, self.handle());
-        dialogs::message("Run CLI Task", "CLI agent started in the background (PTY + overlay + write queue).\nThe dashboard session list updates when it finishes.");
+    }
+
+    /// Append a chunk of agent output to the Activity tab.
+    ///
+    /// The buffer is capped, because a chatty agent can emit megabytes and the
+    /// whole buffer is handed to the text area on every chunk. Trimming drops
+    /// from the front on a char boundary, so a multi-byte character is never
+    /// cut in half.
+    fn append_cli_output(&mut self, chunk: &str) {
+        const CAP: usize = 200_000;
+        self.cli_output
+            .push_str(&crate::transcript_view::strip_ansi(chunk));
+        if self.cli_output.len() > CAP {
+            let cut = self.cli_output.len() - CAP;
+            let cut = (cut..self.cli_output.len())
+                .find(|i| self.cli_output.is_char_boundary(*i))
+                .unwrap_or(self.cli_output.len());
+            self.cli_output.drain(..cut);
+        }
+        let handle = self.ta_activity;
+        let text = self.cli_output.clone();
+        if let Some(area) = self.control_mut(handle) {
+            area.set_text(&text);
+        }
+    }
+
+    /// Bring the Activity tab up, where the live output goes.
+    fn show_activity_tab(&mut self) {
+        let handle = self.tabs;
+        if let Some(tabs) = self.control_mut(handle) {
+            tabs.set_current_tab(ACTIVITY_TAB);
+        }
     }
 
     /// Interrogation center (FR-10.6): pending/deferred clarifications across
@@ -1171,7 +1255,19 @@ impl BackgroundTaskEvents<CliTaskMsg, bool> for MissionControl {
         _: &BackgroundTask<CliTaskMsg, bool>,
     ) -> EventProcessStatus {
         match value {
+            CliTaskMsg::Output(chunk) => self.append_cli_output(&chunk),
+            CliTaskMsg::Harvested {
+                applied,
+                rejected,
+                paths,
+            } => {
+                self.append_cli_output(&format!(
+                    "\n[rolen] harvested {applied} write(s), {rejected} rejected across \
+                     {paths} path(s)\n"
+                ));
+            }
             CliTaskMsg::Finished(msg) => {
+                self.append_cli_output(&format!("\n[rolen] {msg}\n"));
                 self.refresh_sessions();
                 self.refresh_today();
                 dialogs::message("CLI Task", &msg);
