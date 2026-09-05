@@ -61,6 +61,17 @@ impl ProviderRegistry {
         self.providers.len() != before
     }
 
+    /// FR-4.5: take a provider out of routing rotation (or put it back).
+    pub fn set_suspended(&mut self, id: &str, suspended: bool) -> bool {
+        match self.providers.iter_mut().find(|p| p.id == id) {
+            Some(p) => {
+                p.suspended = suspended;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }

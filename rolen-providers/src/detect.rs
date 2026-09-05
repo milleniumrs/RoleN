@@ -20,6 +20,9 @@ pub fn detect_all() -> Vec<Provider> {
         cli_path: None,
         key_ref: None,
         models: Vec::new(),
+        suspended: false,
+        quota_url: None,
+        quota_json_path: None,
     };
     if client::list_models(&probe).is_ok() {
         found.push(probe);
@@ -37,6 +40,9 @@ pub fn detect_all() -> Vec<Provider> {
                 cli_path: Some(path.into()),
                 key_ref: None,
                 models: Vec::new(),
+                suspended: false,
+                quota_url: None,
+                quota_json_path: None,
             });
         }
     }

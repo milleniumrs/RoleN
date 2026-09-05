@@ -71,3 +71,59 @@ pub fn plan_limit(provider_id: &str) -> Option<(u64, QuotaSource)> {
         .find(|s| s.provider_id == provider_id)
         .and_then(|s| s.plan_limit.map(|l| (l, s.source)))
 }
+
+/// FR-4.4: set the billing-cycle dates of a provider's subscription
+/// (`renewal` also anchors the exhaustion forecast).
+pub fn set_cycle(
+    provider_id: &str,
+    cycle_start: Option<chrono::DateTime<chrono::Utc>>,
+    renewal: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), ProviderError> {
+    let mut subs = load()?;
+    if let Some(s) = subs.iter_mut().find(|s| s.provider_id == provider_id) {
+        if cycle_start.is_some() {
+            s.cycle_start = cycle_start;
+        }
+        if renewal.is_some() {
+            s.renewal = renewal;
+        }
+    } else {
+        subs.push(Subscription {
+            provider_id: provider_id.to_string(),
+            plan_limit: None,
+            used: 0,
+            cycle_start,
+            renewal,
+            source: QuotaSource::Manual,
+        });
+    }
+    save(&subs)
+}
+
+/// FR-4.1/4.2: record quota numbers synced from a provider source (billing
+/// endpoint or parsed CLI output).
+pub fn record_synced(
+    provider_id: &str,
+    used: u64,
+    limit: Option<u64>,
+    source: QuotaSource,
+) -> Result<(), ProviderError> {
+    let mut subs = load()?;
+    if let Some(s) = subs.iter_mut().find(|s| s.provider_id == provider_id) {
+        s.used = used;
+        if let Some(l) = limit {
+            s.plan_limit = Some(l);
+        }
+        s.source = source;
+    } else {
+        subs.push(Subscription {
+            provider_id: provider_id.to_string(),
+            plan_limit: limit,
+            used,
+            cycle_start: None,
+            renewal: None,
+            source,
+        });
+    }
+    save(&subs)
+}
