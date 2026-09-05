@@ -129,6 +129,9 @@ impl AddProviderDialog {
             cli_path: None,
             key_ref: None,
             models: self.discovered.clone(),
+            suspended: false,
+            quota_url: None,
+            quota_json_path: None,
         })
     }
 

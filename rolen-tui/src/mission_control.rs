@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::add_provider::AddProviderDialog;
+use crate::rule_editor::RuleEditorDialog;
 use crate::{model_prices, provider_detail, quick_chat, settings, theme, transcript_view};
 
 #[derive(ListItem)]
@@ -29,6 +30,10 @@ struct ProviderRow {
     quota: String,
     #[Column(name: "Tok today", width: 10, align: right)]
     tokens: String,
+    #[Column(name: "Burn/day", width: 9, align: right)]
+    burn: String,
+    #[Column(name: "Empty in", width: 9, align: right)]
+    eta: String,
 }
 
 #[derive(ListItem)]
@@ -44,33 +49,25 @@ struct RuleRow {
 }
 
 #[derive(ListItem)]
-struct ProjectRow {
-    #[Column(name: "&Name", width: 20)]
-    name: String,
-    #[Column(name: "&Stack", width: 16)]
-    stack: String,
-    #[Column(name: "PRD", width: 6)]
-    prd: String,
-    #[Column(name: "AGENTS", width: 8)]
-    agents: String,
-    #[Column(name: "Clarif.", width: 8, align: right)]
-    clarifications: String,
-    #[Column(name: "Skills", width: 7, align: right)]
-    skills: String,
-}
-
-#[derive(ListItem)]
 struct SessionRow {
-    #[Column(name: "&Session", width: 26)]
+    #[Column(name: "&Session", width: 22)]
     id: String,
-    #[Column(name: "&Provider", width: 16)]
+    #[Column(name: "&Role", width: 12)]
+    role: String,
+    #[Column(name: "&Provider", width: 14)]
     provider: String,
-    #[Column(name: "&Model", width: 24)]
+    #[Column(name: "&Model", width: 20)]
     model: String,
-    #[Column(name: "&State", width: 9)]
+    #[Column(name: "&State", width: 11)]
     state: String,
-    #[Column(name: "Tokens", width: 10, align: right)]
+    #[Column(name: "Tokens", width: 9, align: right)]
     tokens: String,
+    #[Column(name: "Rate t/m", width: 8, align: right)]
+    rate: String,
+    #[Column(name: "Elapsed", width: 8, align: right)]
+    elapsed: String,
+    #[Column(name: "Cost $", width: 8, align: right)]
+    cost: String,
 }
 
 #[derive(ListItem)]
@@ -81,6 +78,37 @@ struct QuestionRow {
     question: String,
     #[Column(name: "&Status", width: 10)]
     status: String,
+}
+
+/// Projects tree node (FR-10.4): project → tasks (tasks.yaml) → sessions.
+struct ProjectNode {
+    label: String,
+    kind: ProjectNodeKind,
+}
+
+#[derive(Clone)]
+enum ProjectNodeKind {
+    /// Index into MissionControl::project_dirs
+    Project(usize),
+    /// Informational task node
+    Task,
+    /// Index into MissionControl::project_session_transcripts
+    Session(usize),
+}
+
+impl ListItem for ProjectNode {
+    fn render_method(&'_ self, column_index: u16) -> Option<RenderMethod<'_>> {
+        match column_index {
+            0 => Some(RenderMethod::Text(self.label.as_str())),
+            _ => None,
+        }
+    }
+    fn columns_count() -> u16 {
+        1
+    }
+    fn column(_: u16) -> Column {
+        Column::new("Project / Task / Session", 90, TextAlignment::Left)
+    }
 }
 
 /// Index of the Activity tab in the tab control built by [`MissionControl::new`].
@@ -152,7 +180,7 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
     conector.notify(CliTaskMsg::Finished(msg));
 }
 
-#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+ModelPrices+NewRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+ThemePaper+ThemeSky+ThemeMint+ThemeSand+Doctor+About+Exit)]
+#[Window(events: MenuEvents+AppBarEvents+WindowEvents+TimerEvents+ListViewEvents<ProviderRow>+ListViewEvents<RuleRow>+ListViewEvents<SessionRow>+ListViewEvents<QuestionRow>+TreeViewEvents<ProjectNode>+BackgroundTaskEvents<CliTaskMsg,bool>, commands: NewProject+Interview+RunProject+PauseProject+BuildProject+AddProvider+DetectClis+HealthCheck+ModelPrices+NewRule+EditRule+DeleteRule+DryRun+QuickChat+RunCliTask+PauseAll+Settings+ThemeDefault+ThemeDarkGray+ThemeLight+ThemeDark+ThemeHacker+ThemeFancy+ThemeRainbow+ThemeOcean+ThemeAmber+ThemePaper+ThemeSky+ThemeMint+ThemeSand+Doctor+About+Exit)]
 pub struct MissionControl {
     // menus (app bar, left side)
     m_file: Handle<MenuButton>,
@@ -175,8 +203,14 @@ pub struct MissionControl {
     lv_providers: Handle<ListView<ProviderRow>>,
     // rules tab
     lv_rules: Handle<ListView<RuleRow>>,
-    // projects tab
-    lv_projects: Handle<ListView<ProjectRow>>,
+    // rule ids parallel to the rules listview rows
+    rule_ids: Vec<String>,
+    // projects tab (FR-10.4 tree: project → tasks → sessions)
+    tv_projects: Handle<TreeView<ProjectNode>>,
+    // project dirs parallel to the tree's root items
+    project_dirs: Vec<std::path::PathBuf>,
+    // transcript paths parallel to session nodes in the projects tree
+    project_session_transcripts: Vec<Option<std::path::PathBuf>>,
     // dashboard: recent sessions
     lv_sessions: Handle<ListView<SessionRow>>,
     session_transcripts: Vec<Option<std::path::PathBuf>>,
@@ -219,7 +253,10 @@ impl MissionControl {
             d_tickets: Handle::None,
             lv_providers: Handle::None,
             lv_rules: Handle::None,
-            lv_projects: Handle::None,
+            rule_ids: Vec::new(),
+            tv_projects: Handle::None,
+            project_dirs: Vec::new(),
+            project_session_transcripts: Vec::new(),
             lv_sessions: Handle::None,
             session_transcripts: Vec::new(),
             lv_questions: Handle::None,
@@ -282,6 +319,9 @@ impl MissionControl {
             menu!(
                 "class: MissionControl, items=[
                 {'&New Rule', cmd:NewRule},
+                {'&Edit Rule', cmd:EditRule},
+                {'De&lete Rule', cmd:DeleteRule},
+                {-},
                 {'&Dry-Run', Ctrl+D, cmd:DryRun}
             ]"
             ),
@@ -371,12 +411,12 @@ impl MissionControl {
             listview!("class: SessionRow,l:1,t:5,r:1,b:1,flags: [ScrollBars]"),
         );
 
-        // Projects
-        w.lv_projects = t.add(
+        // Projects (FR-10.4): tree project → tasks → sessions
+        w.tv_projects = t.add(
             1,
-            listview!("class: ProjectRow,l:0,t:0,r:0,b:1,flags: [ScrollBars, SearchBar]"),
+            TreeView::<ProjectNode>::new(layout!("l:0,t:0,r:0,b:1"), treeview::Flags::ScrollBars),
         );
-        t.add(1, label!("'Project menu: New / Interview / Build — running a project: rolen batch --spec <dir>/tasks.yaml',l:1,b:0,r:1"));
+        t.add(1, label!("'Enter on a project = detail (PRD/AGENTS.md/skills) · Enter on a session = transcript · Project menu: New / Interview / Build',l:1,b:0,r:1"));
 
         // Providers
         w.lv_providers = t.add(
@@ -395,7 +435,12 @@ impl MissionControl {
             3,
             listview!("class: RuleRow,l:0,t:0,r:0,b:1,flags: [ScrollBars, SearchBar]"),
         );
-        t.add(3, label!("'Rules → Dry-Run evaluates a role live. Edit via CLI: rolen rule add/init/remove',l:1,b:0,r:1"));
+        t.add(
+            3,
+            label!(
+                "'Enter = edit · Rules menu: New / Edit / Delete / Dry-Run (Ctrl+D)',l:1,b:0,r:1"
+            ),
+        );
 
         // Questions (interrogation center, FR-10.6): pending clarifications
         // across all projects; Enter/Space answers the selected one.
@@ -464,19 +509,40 @@ impl MissionControl {
             let quota = providers::routing::remaining_pct(&p.id)
                 .map(|pct| format!("{pct}%"))
                 .unwrap_or_else(|| "—".into());
+            // FR-9.2: burn rate + exhaustion forecast for budgeted providers
+            let (burn, eta) = providers::routing::burn_rate(&p.id)
+                .map(|(per_day, days_left)| {
+                    (
+                        fmt_tokens(per_day),
+                        if days_left >= 30.0 {
+                            "30d+".into()
+                        } else if days_left >= 1.0 {
+                            format!("{days_left:.0}d")
+                        } else {
+                            format!("{:.0}h", days_left * 24.0)
+                        },
+                    )
+                })
+                .unwrap_or_else(|| ("—".into(), "—".into()));
             rows.push(ProviderRow {
                 name: p.id.clone(),
                 ptype: format!("{:?}", p.ptype),
-                status: self.health.get(&p.id).cloned().unwrap_or_else(|| {
-                    if p.ptype == rolen_core::types::ProviderType::Cli {
-                        "cli".into()
-                    } else {
-                        "not checked".into()
-                    }
-                }),
+                status: if p.suspended {
+                    "SUSPENDED".into()
+                } else {
+                    self.health.get(&p.id).cloned().unwrap_or_else(|| {
+                        if p.ptype == rolen_core::types::ProviderType::Cli {
+                            "cli".into()
+                        } else {
+                            "not checked".into()
+                        }
+                    })
+                },
                 models: p.models.len().to_string(),
                 quota,
                 tokens,
+                burn,
+                eta,
             });
         }
         self.provider_ids = ids;
@@ -502,6 +568,7 @@ impl MissionControl {
     /// Rebuild the rules table from rules.yaml.
     fn refresh_rules(&mut self) {
         let rules = rolen_core::rules::RuleSet::load().unwrap_or_default();
+        self.rule_ids = rules.rules.iter().map(|r| r.id.clone()).collect();
         let rows: Vec<RuleRow> = rules
             .rules
             .iter()
@@ -521,10 +588,59 @@ impl MissionControl {
         }
     }
 
+    /// Visual rule editor (FR-3.5): `None` creates, `Some(id)` edits in place.
+    fn edit_rule_dialog(&mut self, rule_id: Option<String>) {
+        let editing = rule_id.and_then(|id| {
+            rolen_core::rules::RuleSet::load()
+                .ok()
+                .and_then(|rs| rs.rules.into_iter().find(|r| r.id == id))
+        });
+        if RuleEditorDialog::new(editing).show() == Some(true) {
+            self.refresh_rules();
+        }
+    }
+
+    /// Id of the rule selected in the Rules tab, if any.
+    fn selected_rule_id(&self) -> Option<String> {
+        let lv = self.lv_rules;
+        self.control(lv)
+            .and_then(|lv| lv.current_item_index())
+            .and_then(|i| self.rule_ids.get(i).cloned())
+    }
+
+    fn delete_rule(&mut self) {
+        let Some(id) = self.selected_rule_id() else {
+            dialogs::message("Delete Rule", "Select a rule in the Rules tab first.");
+            return;
+        };
+        if !dialogs::validate("Delete Rule", &format!("Delete rule '{id}'?")) {
+            return;
+        }
+        match rolen_core::rules::RuleSet::load() {
+            Ok(mut rules) => {
+                rules.rules.retain(|r| r.id != id);
+                match rules.save() {
+                    Ok(()) => self.refresh_rules(),
+                    Err(e) => dialogs::error("Delete Rule", &format!("failed to save: {e}")),
+                }
+            }
+            Err(e) => dialogs::error("Delete Rule", &format!("failed to load rules: {e}")),
+        }
+    }
+
     /// FR-3.4 dry-run: evaluate a role against live state and explain.
     fn dry_run_rule(&mut self) {
+        let default_role = self
+            .selected_rule_id()
+            .and_then(|id| {
+                rolen_core::rules::RuleSet::load()
+                    .ok()
+                    .and_then(|rs| rs.rules.into_iter().find(|r| r.id == id))
+            })
+            .map(|r| r.role)
+            .unwrap_or_else(|| "coder".into());
         let Some(role) =
-            dialogs::input::<String>("Dry-Run", "Role to evaluate:", Some("coder".into()), None)
+            dialogs::input::<String>("Dry-Run", "Role to evaluate:", Some(default_role), None)
         else {
             return;
         };
@@ -660,34 +776,110 @@ impl MissionControl {
         let Some(root) = self.workspace_root() else {
             return;
         };
-        let rows: Vec<ProjectRow> = rolen_core::project::list_projects(&root)
-            .into_iter()
-            .map(|(dir, m)| ProjectRow {
-                name: m.id.clone(),
-                stack: m.stack.join(","),
-                prd: if dir.join("PRD.json").exists() {
-                    "✓"
+        let projects = rolen_core::project::list_projects(&root);
+        self.project_dirs = projects.iter().map(|(dir, _)| dir.clone()).collect();
+        self.project_session_transcripts = Vec::new();
+
+        // sessions by task id, for the per-task session nodes
+        let sessions = rolen_core::ledger::Ledger::open_default()
+            .and_then(|l| l.recent_sessions(200))
+            .unwrap_or_default();
+
+        // build the tree data first (no borrows of self while populating)
+        struct TaskNode {
+            label: String,
+            sessions: Vec<(String, Option<std::path::PathBuf>)>,
+        }
+        let mut tree: Vec<(String, Vec<TaskNode>)> = Vec::new();
+        let mut transcripts: Vec<Option<std::path::PathBuf>> = Vec::new();
+        for (dir, m) in projects.iter() {
+            let pending = m
+                .clarifications
+                .iter()
+                .filter(|c| c.status != rolen_core::types::ClarificationStatus::Answered)
+                .count();
+            let marks = format!(
+                "{}{}{}",
+                if dir.join("PRD.json").exists() {
+                    " PRD✓"
                 } else {
-                    "—"
-                }
-                .into(),
-                agents: if dir.join("AGENTS.md").exists() {
-                    "✓"
+                    ""
+                },
+                if dir.join("AGENTS.md").exists() {
+                    " AGENTS✓"
                 } else {
-                    "—"
+                    ""
+                },
+                if pending > 0 {
+                    format!(" ❓{pending}")
+                } else {
+                    String::new()
+                },
+            );
+            let mut task_nodes = Vec::new();
+            if let Ok(spec) = rolen_orchestrator::BatchSpec::load(&dir.join("tasks.yaml")) {
+                for t in &spec.tasks {
+                    let sess: Vec<(String, Option<std::path::PathBuf>)> = sessions
+                        .iter()
+                        .filter(|s| s.task_id.as_deref() == Some(t.id.as_str()))
+                        .map(|s| {
+                            (
+                                format!(
+                                    "↳ {} {}/{} {}",
+                                    s.id,
+                                    s.provider_id,
+                                    s.model,
+                                    format!("{:?}", s.state).to_lowercase()
+                                ),
+                                s.transcript_path.clone(),
+                            )
+                        })
+                        .collect();
+                    task_nodes.push(TaskNode {
+                        label: format!("⚙ {} — {} [{}]", t.id, t.title, t.role),
+                        sessions: sess,
+                    });
                 }
-                .into(),
-                clarifications: m.clarifications.len().to_string(),
-                skills: m.skills.len().to_string(),
-            })
-            .collect();
-        let lv = self.lv_projects;
-        if let Some(lv) = self.control_mut(lv) {
-            lv.clear();
-            for row in rows {
-                lv.add(row);
+            }
+            tree.push((format!("{} ({}){marks}", m.name, m.id), task_nodes));
+        }
+
+        let tv = self.tv_projects;
+        if let Some(tv) = self.control_mut(tv) {
+            tv.clear();
+            for (idx, (label, tasks)) in tree.iter().enumerate() {
+                let proot = tv.add_item(treeview::Item::expandable(
+                    ProjectNode {
+                        label: label.clone(),
+                        kind: ProjectNodeKind::Project(idx),
+                    },
+                    false,
+                ));
+                for task in tasks {
+                    let tnode = tv.add_item_to_parent(
+                        treeview::Item::expandable(
+                            ProjectNode {
+                                label: task.label.clone(),
+                                kind: ProjectNodeKind::Task,
+                            },
+                            true,
+                        ),
+                        proot,
+                    );
+                    for (slabel, spath) in &task.sessions {
+                        transcripts.push(spath.clone());
+                        tv.add_item_to_parent(
+                            treeview::Item::non_expandable(ProjectNode {
+                                label: slabel.clone(),
+                                kind: ProjectNodeKind::Session(transcripts.len() - 1),
+                            }),
+                            tnode,
+                        );
+                    }
+                }
             }
         }
+        self.project_session_transcripts = transcripts;
     }
 
     fn new_project(&mut self) {
@@ -725,8 +917,20 @@ impl MissionControl {
         title: &str,
     ) -> Option<(std::path::PathBuf, rolen_core::project::ProjectMeta)> {
         let root = self.workspace_root()?;
-        let name = dialogs::input::<String>(title, "Project id:", None, None)?;
-        rolen_core::project::find_project(&root, name.trim())
+        let projects = rolen_core::project::list_projects(&root);
+        if projects.is_empty() {
+            dialogs::message(
+                title,
+                "No projects yet — create one with Project → New Project.",
+            );
+            return None;
+        }
+        let entries: Vec<(String, String)> = projects
+            .iter()
+            .map(|(_, m)| (m.id.clone(), m.name.clone()))
+            .collect();
+        let id = crate::pick_project::PickProjectDialog::new(title, &entries).show()?;
+        rolen_core::project::find_project(&root, &id)
     }
 
     /// FR-6.2 TUI form: question batches as sequential input dialogs.
@@ -746,27 +950,21 @@ impl MissionControl {
         };
         let mut answered = 0;
         for (i, q) in questions.iter().enumerate() {
-            let mut text = format!("[{}/{}] {}\n", i + 1, questions.len(), q.question);
-            for (j, opt) in q.options.iter().enumerate() {
-                text.push_str(&format!("  {}) {}\n", j + 1, opt));
-            }
-            text.push_str("\n(number picks an option; empty defers)");
-            let Some(answer) = dialogs::input::<String>("Interview", &text, None, None) else {
-                break;
+            // FR-6.2: form controls — radio buttons for options, text field
+            // otherwise; "answer later" defers (question stays pending).
+            use crate::question_form::{QuestionAnswer, QuestionForm};
+            let Some(result) =
+                QuestionForm::new(i + 1, questions.len(), &q.question, &q.options).show()
+            else {
+                break; // dialog cancelled — stop the batch
             };
-            let (answer, status) = if answer.trim().is_empty() {
-                (None, rolen_core::types::ClarificationStatus::Deferred)
-            } else {
-                let picked = answer
-                    .trim()
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|n| q.options.get(n.saturating_sub(1)))
-                    .cloned();
-                (
-                    Some(picked.unwrap_or_else(|| answer.trim().to_string())),
-                    rolen_core::types::ClarificationStatus::Answered,
-                )
+            let (answer, status) = match result {
+                QuestionAnswer::Deferred => {
+                    (None, rolen_core::types::ClarificationStatus::Deferred)
+                }
+                QuestionAnswer::Answered(a) => {
+                    (Some(a), rolen_core::types::ClarificationStatus::Answered)
+                }
             };
             if status == rolen_core::types::ClarificationStatus::Answered {
                 answered += 1;
@@ -774,6 +972,7 @@ impl MissionControl {
             meta.clarifications.push(rolen_core::types::Clarification {
                 id: format!("q{}", meta.clarifications.len() + 1),
                 project_id: meta.id.clone(),
+                task_id: None,
                 question: q.question.clone(),
                 options: q.options.clone(),
                 answer,
@@ -804,12 +1003,49 @@ impl MissionControl {
                 return;
             }
         };
+
+        // FR-5.2/5.3: review before writing — full PRD.md on first build,
+        // unified diffs against existing files on rebuilds.
+        let new_prd_md = rolen_core::project::render_prd_md(&meta, &prd);
+        let new_agents = rolen_core::project::render_agents_md(&meta, &prd);
+        let mut preview = String::new();
+        let mut changes = false;
+        for (file, new) in [("PRD.md", &new_prd_md), ("AGENTS.md", &new_agents)] {
+            let path = dir.join(file);
+            match std::fs::read_to_string(&path) {
+                Ok(old) if old == *new => {
+                    preview.push_str(&format!("===== {file}: unchanged =====\n\n"));
+                }
+                Ok(old) => {
+                    changes = true;
+                    preview.push_str(&format!(
+                        "===== {file}: diff against existing (- old / + new) =====\n{}\n",
+                        rolen_core::patch::simple_diff(&old, new)
+                    ));
+                }
+                Err(_) => {
+                    changes = true;
+                    preview.push_str(&format!("===== {file}: new file =====\n{new}\n\n"));
+                }
+            }
+        }
+        if changes
+            && !crate::project_view::PreviewApply::new(
+                "Build preview — apply these files?",
+                &preview,
+            )
+            .show()
+            .unwrap_or(false)
+        {
+            dialogs::message("Build", "Discarded — nothing was written.");
+            return;
+        }
+
         if let Err(e) = rolen_core::project::write_prd(&dir, &meta, &prd) {
             dialogs::error("Build", &e.to_string());
             return;
         }
-        let agents = rolen_core::project::render_agents_md(&meta, &prd);
-        let _ = std::fs::write(dir.join("AGENTS.md"), agents);
+        let _ = std::fs::write(dir.join("AGENTS.md"), &new_agents);
         let skills = rolen_core::project::suggest_skills(&meta, &prd, 5);
         let dag_note = match rolen_orchestrator::daggen::generate_dag(&meta, &prd) {
             Ok(tasks) => {
@@ -847,14 +1083,38 @@ impl MissionControl {
             .and_then(|l| l.recent_sessions(12))
             .unwrap_or_default();
         self.session_transcripts = sessions.iter().map(|s| s.transcript_path.clone()).collect();
+        let now = chrono::Utc::now();
         let rows: Vec<SessionRow> = sessions
             .into_iter()
-            .map(|s| SessionRow {
-                id: s.id.chars().take(24).collect(),
-                provider: s.provider_id,
-                model: s.model,
-                state: format!("{:?}", s.state).to_lowercase(),
-                tokens: fmt_tokens(s.tokens_in + s.tokens_out),
+            .map(|s| {
+                let total = s.tokens_in + s.tokens_out;
+                let elapsed_s = (now - s.started).num_seconds().max(0) as u64;
+                SessionRow {
+                    id: s.id.chars().take(20).collect(),
+                    role: if s.role.is_empty() {
+                        "—".into()
+                    } else {
+                        s.role
+                    },
+                    provider: s.provider_id,
+                    model: s.model,
+                    state: format!("{:?}", s.state).to_lowercase(),
+                    tokens: fmt_tokens(total),
+                    // tokens/minute over the session's lifetime (FR-9.1 rate)
+                    rate: if elapsed_s >= 60 {
+                        format!("{}", total * 60 / elapsed_s)
+                    } else {
+                        "—".into()
+                    },
+                    elapsed: if elapsed_s >= 3600 {
+                        format!("{}h{}m", elapsed_s / 3600, elapsed_s % 3600 / 60)
+                    } else if elapsed_s >= 60 {
+                        format!("{}m{}s", elapsed_s / 60, elapsed_s % 60)
+                    } else {
+                        format!("{elapsed_s}s")
+                    },
+                    cost: format!("{:.3}", s.cost),
+                }
             })
             .collect();
         let lv = self.lv_sessions;
@@ -985,26 +1245,15 @@ impl MissionControl {
         let Some(c) = meta.clarifications.iter().find(|c| c.id == qid).cloned() else {
             return;
         };
-        let mut text = format!("{}\n", c.question);
-        for (j, opt) in c.options.iter().enumerate() {
-            text.push_str(&format!("  {}) {}\n", j + 1, opt));
-        }
-        text.push_str("\n(number picks an option; empty keeps it pending)");
-        let Some(answer) = dialogs::input::<String>("Answer clarification", &text, None, None)
+        // FR-6.2: same form controls as the interview (radio/text + defer)
+        use crate::question_form::{QuestionAnswer, QuestionForm};
+        let Some(QuestionAnswer::Answered(answer)) =
+            QuestionForm::new(1, 1, &c.question, &c.options).show()
         else {
-            return;
+            return; // cancelled or deferred — stays pending
         };
-        if answer.trim().is_empty() {
-            return;
-        }
-        let picked = answer
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| c.options.get(n.saturating_sub(1)))
-            .cloned();
         if let Some(c) = meta.clarifications.iter_mut().find(|c| c.id == qid) {
-            c.answer = Some(picked.unwrap_or_else(|| answer.trim().to_string()));
+            c.answer = Some(answer);
             c.status = rolen_core::types::ClarificationStatus::Answered;
         }
         if let Err(e) = meta.save(&dir) {
@@ -1035,19 +1284,81 @@ impl MissionControl {
                     }
                     if is_crit && !self.alerted.contains(&s.provider_id) {
                         self.alerted.insert(s.provider_id.clone());
+                        // FR-9.4: optional OS toast in addition to the TUI popup
+                        if cfg.general.os_notifications {
+                            rolen_core::notify::toast(
+                                "RoleN — quota critical",
+                                &format!(
+                                    "Provider '{}' has used {used}% of its configured budget",
+                                    s.provider_id
+                                ),
+                            );
+                        }
                         let (limit, source) = providers::quota::plan_limit(&s.provider_id)
                             .map(|(l, src)| (l.to_string(), format!("{src:?}").to_lowercase()))
                             .unwrap_or_else(|| ("?".into(), "unknown".into()));
+                        // FR-4.5: execute the configured alert action
+                        use rolen_core::types::AlertAction;
+                        let action_note = match cfg.quotas.action {
+                            AlertAction::SwitchRule => {
+                                if let Ok(mut reg) = providers::ProviderRegistry::load() {
+                                    if reg.set_suspended(&s.provider_id, true) {
+                                        let _ = reg.save();
+                                        self.refresh_providers();
+                                    }
+                                }
+                                format!(
+                                    "ACTION (switch-rule): '{0}' is now SUSPENDED — rule routing\n\
+                                     skips it and fallback chains engage. Resume with:\n  \
+                                     rolen provider resume --id {0}\n",
+                                    s.provider_id
+                                )
+                            }
+                            AlertAction::PauseRole => {
+                                let roles = rolen_core::rules::RuleSet::load()
+                                    .map(|rs| {
+                                        let mut roles: Vec<String> = rs
+                                            .rules
+                                            .iter()
+                                            .filter(|r| {
+                                                r.fallback_chain.iter().any(|e| {
+                                                    e.split('/').next().map(str::trim)
+                                                        == Some(s.provider_id.as_str())
+                                                })
+                                            })
+                                            .map(|r| r.role.clone())
+                                            .collect();
+                                        roles.sort();
+                                        roles.dedup();
+                                        roles
+                                    })
+                                    .unwrap_or_default();
+                                for role in &roles {
+                                    let _ = rolen_core::rules::set_role_paused(role, true);
+                                }
+                                format!(
+                                    "ACTION (pause-role): paused role(s): {}.\n\
+                                     Their dispatch fails until resumed, e.g.:\n  \
+                                     rolen rule resume --role <role>\n",
+                                    if roles.is_empty() {
+                                        "(none route through this provider)".to_string()
+                                    } else {
+                                        roles.join(", ")
+                                    }
+                                )
+                            }
+                            AlertAction::Notify => String::new(),
+                        };
                         dialogs::alert(
                             "Quota critical",
                             &format!(
                                 "Provider '{}' has used {used}% of its CONFIGURED limit\n\
                                  ({limit} tokens, source: {source}).\n\n\
+                                 {action_note}\
                                  This is RoleN's own budget setting — not necessarily the\n\
                                  provider's real plan. Adjust or remove it with:\n  \
                                  rolen provider budget --id {} --tokens <N>\n  \
-                                 rolen provider budget --id {} --clear\n\n\
-                                 Rules with quota fallbacks will skip this provider meanwhile.",
+                                 rolen provider budget --id {} --clear",
                                 s.provider_id, s.provider_id, s.provider_id
                             ),
                         );
@@ -1059,11 +1370,15 @@ impl MissionControl {
                 }
             }
         }
-        let h = self.st_queue; // reuse: shows queue depth; add alert marker
+        let h = self.st_queue; // queue depth label + alert marker
         if let Some(l) = self.appbar().get_mut(h) {
+            // FR-7.8: live queue depth from the cross-process ticket journal
+            let depth = rolen_core::ledger::Ledger::open_default()
+                .and_then(|l| l.queued_ticket_count())
+                .unwrap_or(0);
             match worst {
-                Some((pid, used)) => l.set_caption(&format!("⚠ {pid} {used}%")),
-                None => l.set_caption("queue: 0"),
+                Some((pid, used)) => l.set_caption(&format!("⚠ {pid} {used}% · queue: {depth}")),
+                None => l.set_caption(&format!("queue: {depth}")),
             }
         }
     }
@@ -1146,7 +1461,15 @@ impl MenuEvents for MissionControl {
                 self.refresh_today();
             }
             BuildProject => self.build_project(),
-            NewRule => self.not_yet("visual rule editor (M6) — use `rolen rule add` meanwhile"),
+            NewRule => self.edit_rule_dialog(None),
+            EditRule => {
+                let id = self.selected_rule_id();
+                if id.is_none() {
+                    dialogs::message("Edit Rule", "Select a rule in the Rules tab first.");
+                }
+                self.edit_rule_dialog(id);
+            }
+            DeleteRule => self.delete_rule(),
             DryRun => self.dry_run_rule(),
             QuickChat => {
                 quick_chat::QuickChat::new().show();
@@ -1213,6 +1536,18 @@ impl ListViewEvents<ProviderRow> for MissionControl {
     }
 }
 
+impl ListViewEvents<RuleRow> for MissionControl {
+    fn on_item_action(
+        &mut self,
+        _handle: Handle<ListView<RuleRow>>,
+        index: usize,
+    ) -> EventProcessStatus {
+        let id = self.rule_ids.get(index).cloned();
+        self.edit_rule_dialog(id);
+        EventProcessStatus::Processed
+    }
+}
+
 impl ListViewEvents<SessionRow> for MissionControl {
     fn on_item_action(
         &mut self,
@@ -1244,6 +1579,49 @@ impl ListViewEvents<QuestionRow> for MissionControl {
         index: usize,
     ) -> EventProcessStatus {
         self.answer_question(index);
+        EventProcessStatus::Processed
+    }
+}
+
+impl TreeViewEvents<ProjectNode> for MissionControl {
+    fn on_item_action(
+        &mut self,
+        handle: Handle<TreeView<ProjectNode>>,
+        item: Handle<treeview::Item<ProjectNode>>,
+    ) -> EventProcessStatus {
+        // FR-10.4: Enter on a tree node — project → detail window,
+        // session → transcript.
+        let node = self
+            .control(handle)
+            .and_then(|tv| tv.item(item).map(|i| i.value().kind.clone()));
+        match node {
+            Some(ProjectNodeKind::Project(idx)) => {
+                if let Some(dir) = self.project_dirs.get(idx).cloned() {
+                    match rolen_core::project::ProjectMeta::load(&dir) {
+                        Ok(meta) => {
+                            crate::project_view::ProjectView::new(&dir, &meta).show();
+                        }
+                        Err(e) => dialogs::error("Project", &e.to_string()),
+                    }
+                }
+            }
+            Some(ProjectNodeKind::Session(idx)) => {
+                if let Some(Some(path)) = self.project_session_transcripts.get(idx).cloned() {
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            transcript_view::TranscriptView::new("Transcript", &content).show();
+                        }
+                        Err(e) => dialogs::error(
+                            "Transcript",
+                            &format!("cannot read {}: {e}", path.display()),
+                        ),
+                    }
+                } else {
+                    dialogs::message("Transcript", "This session has no transcript file.");
+                }
+            }
+            _ => {}
+        }
         EventProcessStatus::Processed
     }
 }

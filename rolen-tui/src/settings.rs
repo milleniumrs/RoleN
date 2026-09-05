@@ -15,6 +15,7 @@ pub struct SettingsWindow {
     t_provider_cap: Handle<TextField>,
     t_warn: Handle<TextField>,
     t_crit: Handle<TextField>,
+    ck_os_notifications: Handle<CheckBox>,
     l_status: Handle<Label>,
     b_save: Handle<Button>,
     b_cancel: Handle<Button>,
@@ -32,6 +33,7 @@ impl SettingsWindow {
             t_provider_cap: Handle::None,
             t_warn: Handle::None,
             t_crit: Handle::None,
+            ck_os_notifications: Handle::None,
             l_status: Handle::None,
             b_save: Handle::None,
             b_cancel: Handle::None,
@@ -66,6 +68,9 @@ impl SettingsWindow {
         w.t_warn = w.add(textfield!("x:26,y:13,w:8"));
         w.add(label!("'critical %:',x:38,y:13,w:12"));
         w.t_crit = w.add(textfield!("x:50,y:13,w:8"));
+        w.ck_os_notifications = w.add(checkbox!(
+            "'&Also send alerts as OS toast notifications',x:2,y:14,w:56"
+        ));
 
         w.add(label!(
             "'Secrets: OS keychain → age vault fallback (ROLEN_VAULT_PASSWORD).',x:2,y:15,w:64"
@@ -121,6 +126,10 @@ impl SettingsWindow {
         if let Some(cb) = w.control_mut(h) {
             cb.set_index(mode_idx);
         }
+        let h = w.ck_os_notifications;
+        if let Some(ck) = w.control_mut(h) {
+            ck.set_checked(cfg.general.os_notifications);
+        }
         w
     }
 
@@ -168,6 +177,10 @@ impl SettingsWindow {
         if let Ok(v) = self.field(self.t_crit).parse::<u8>() {
             cfg.quotas.crit_pct = v.min(100);
         }
+        cfg.general.os_notifications = self
+            .control(self.ck_os_notifications)
+            .map(|ck| ck.is_checked())
+            .unwrap_or(false);
         if cfg.quotas.warn_pct >= cfg.quotas.crit_pct && cfg.quotas.crit_pct < 100 {
             self.set_status("warn % must be below critical %");
             return;
