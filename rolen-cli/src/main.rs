@@ -47,15 +47,22 @@ enum Commands {
     },
     /// Run an agent task headless through the built-in runtime (PRD FR-12)
     Run {
-        /// Role to route (e.g. coder, tool-runner)
+        /// Role to route (e.g. coder, tool-runner) — required unless --project
         #[arg(long)]
-        role: String,
-        /// Task description for the agent
-        #[arg(long)]
+        role: Option<String>,
+        /// Task description — or the task ID from tasks.yaml when --project is set
+        /// (omit with --project to run the project's whole DAG)
+        #[arg(long, default_value = "")]
         task: String,
-        /// Workspace directory the agent is sandboxed to
+        /// Workspace directory the agent is sandboxed to (project dir when --project)
         #[arg(long, default_value = ".")]
         workdir: String,
+        /// Project id: run inside that project (FR-11.2)
+        #[arg(long)]
+        project: Option<String>,
+        /// Accepted for CI parity — run is always headless (FR-11.2)
+        #[arg(long)]
+        headless: bool,
         /// Bypass rules: use this provider directly (requires --model)
         #[arg(long)]
         provider: Option<String>,
@@ -71,6 +78,9 @@ enum Commands {
         /// Machine-readable JSON result (events still print to stderr)
         #[arg(long)]
         json: bool,
+        /// Resume from a context snapshot written by a cancelled/paused session (FR-8.4)
+        #[arg(long)]
+        resume: Option<String>,
     },
     /// Run a batch of tasks as a parallel DAG through the orchestrator (PRD FR-7/FR-8)
     Batch {
@@ -104,6 +114,27 @@ enum Commands {
     Cli {
         #[command(subcommand)]
         action: CliAction,
+    },
+    /// List agent sessions from the ledger (PRD FR-9)
+    Sessions {
+        /// Max rows (0 = all)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        /// Machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export the ledger (entries, sessions or tickets) as CSV/JSON (FR-4.6)
+    Export {
+        /// ledger | sessions | tickets
+        #[arg(long, default_value = "ledger")]
+        what: String,
+        /// csv | json
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Output file (default: stdout)
+        #[arg(long)]
+        out: Option<String>,
     },
 }
 
@@ -203,6 +234,16 @@ enum RuleAction {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Pause a role: dispatch fails until resumed (FR-4.5 pause-role)
+    Pause {
+        #[arg(long)]
+        role: String,
+    },
+    /// Resume a paused role
+    Resume {
+        #[arg(long)]
+        role: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -215,6 +256,17 @@ enum ConfigAction {
     Show,
     /// Print config/data file locations
     Path,
+    /// Export the whole setup (secrets excluded) as a JSON bundle (FR-14.4)
+    Export {
+        /// Output file (default: stdout)
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Import a setup bundle; existing files are backed up as .bak (FR-14.4)
+    Import {
+        #[arg(long)]
+        from: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -299,6 +351,28 @@ enum ProviderAction {
         /// Remove the budget (quota becomes unknown: no alerts, optimistic routing)
         #[arg(long)]
         clear: bool,
+        /// Billing cycle start, YYYY-MM-DD (FR-4.4)
+        #[arg(long)]
+        cycle_start: Option<String>,
+        /// Renewal date, YYYY-MM-DD (FR-4.4)
+        #[arg(long)]
+        renewal: Option<String>,
+    },
+    /// Pull quota numbers from the provider: billing endpoint (api, needs
+    /// quota_url in providers.toml) or the adapter's quota probe (cli) (FR-4.1/4.2)
+    SyncQuota {
+        #[arg(long)]
+        id: String,
+    },
+    /// Take a provider out of routing rotation (fallback chains skip it)
+    Suspend {
+        #[arg(long)]
+        id: String,
+    },
+    /// Put a suspended provider back into routing rotation
+    Resume {
+        #[arg(long)]
+        id: String,
     },
 }
 
@@ -314,21 +388,27 @@ fn main() -> Result<()> {
             role,
             task,
             workdir,
+            project,
+            headless,
             provider,
             model,
             max_steps,
             allow_shell,
             json,
-        }) => run_cmd(
+            resume,
+        }) => run_cmd(RunArgs {
             role,
             task,
             workdir,
+            project,
+            headless,
             provider,
             model,
             max_steps,
             allow_shell,
             json,
-        )?,
+            resume,
+        })?,
         Some(Commands::Batch {
             spec,
             workdir,
@@ -338,6 +418,8 @@ fn main() -> Result<()> {
         }) => batch_cmd(spec, workdir, max_parallel, allow_shell, watch)?,
         Some(Commands::Project { action }) => project_cmd(action)?,
         Some(Commands::Cli { action }) => cli_cmd(action)?,
+        Some(Commands::Sessions { limit, json }) => sessions_cmd(limit, json)?,
+        Some(Commands::Export { what, format, out }) => export_cmd(&what, &format, out)?,
         Some(Commands::Prd { validate }) => {
             let problems = rolen_core::project::validate_prd_json(std::path::Path::new(&validate))
                 .map_err(|e| anyhow::anyhow!(e))?;
@@ -489,6 +571,7 @@ fn run_interview(
         meta.clarifications.push(Clarification {
             id: format!("q{}", meta.clarifications.len() + 1),
             project_id: meta.id.clone(),
+            task_id: None,
             question: q.question.clone(),
             options: q.options.clone(),
             answer,
@@ -534,6 +617,9 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
                     meta.clarifications.len() - answered
                 );
             }
+            if no_interview {
+                println!("next: rolen project interview --name {}", meta.id);
+            }
             println!("next: rolen project build --name {}", meta.id);
         }
         ProjectAction::List => {
@@ -571,7 +657,10 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
         ProjectAction::Interview { name, mode } => {
             let root = workspace_root()?;
             let (dir, mut meta) = proj::find_project(&root, &name).ok_or_else(|| {
-                anyhow::anyhow!("project '{name}' not found in {}", root.display())
+                anyhow::anyhow!(
+                    "project '{name}' not found in {} — run `rolen project list` to see project ids",
+                    root.display()
+                )
             })?;
             let answered = run_interview(&mut meta, question_mode(mode)?)?;
             meta.save(&dir)?;
@@ -672,65 +761,75 @@ fn batch_cmd(
     if !watch {
         println!("batch: {} task(s), workdir {workdir}", spec.tasks.len());
     }
+    exec_batch(spec, workdir.into(), max_parallel, &allow_shell, watch)
+}
+
+/// Shared DAG execution for `rolen batch` and `rolen run --project` (FR-11.2).
+/// CI-safe exit codes: 0 = all tasks done, 1 = any task failed.
+fn exec_batch(
+    spec: rolen_orchestrator::BatchSpec,
+    workdir: std::path::PathBuf,
+    max_parallel: usize,
+    allow_shell: &str,
+    watch: bool,
+) -> Result<()> {
     let opts = rolen_orchestrator::BatchOptions {
-        workdir: workdir.into(),
+        workdir,
         max_parallel,
         shell_allow: allow_shell
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect(),
-        cancel: None,
+        cancel: Some(cancel_on_ctrlc()),
+        pause: None,
     };
     let report = rolen_orchestrator::run_batch(&spec, &opts, &mut |ev| {
-        if watch {
-            // FR-11.4: NDJSON event stream for external tooling
-            let line = match &ev {
-                rolen_orchestrator::BatchEvent::TaskStarted { id, role } => {
-                    serde_json::json!({"event": "task_started", "id": id, "role": role})
-                }
-                rolen_orchestrator::BatchEvent::Waiting { id, reason } => {
-                    serde_json::json!({"event": "waiting", "id": id, "reason": reason})
-                }
-                rolen_orchestrator::BatchEvent::TaskDone { id, tokens, steps } => {
-                    serde_json::json!({"event": "task_done", "id": id, "tokens": tokens, "steps": steps})
-                }
-                rolen_orchestrator::BatchEvent::TaskFailed { id, error } => {
-                    serde_json::json!({"event": "task_failed", "id": id, "error": error})
-                }
-                rolen_orchestrator::BatchEvent::Agent { id, line } => {
-                    serde_json::json!({"event": "agent", "id": id, "line": line})
-                }
-                rolen_orchestrator::BatchEvent::AllDone { done, failed } => {
-                    serde_json::json!({"event": "all_done", "done": done, "failed": failed})
-                }
-            };
-            println!("{line}");
-        } else {
-            match ev {
-                rolen_orchestrator::BatchEvent::TaskStarted { id, role } => {
-                    println!("▶ {id} started (role {role})")
-                }
-                rolen_orchestrator::BatchEvent::Waiting { id, reason } => {
-                    println!("… {id} waiting: {reason}")
-                }
-                rolen_orchestrator::BatchEvent::TaskDone { id, tokens, steps } => {
-                    println!("✅ {id} done ({steps} steps, {tokens} tokens, checkpoint committed)")
-                }
-                rolen_orchestrator::BatchEvent::TaskFailed { id, error } => {
-                    println!("❌ {id} failed: {error}")
-                }
-                rolen_orchestrator::BatchEvent::Agent { id, line } => println!("[{id}] {line}"),
-                rolen_orchestrator::BatchEvent::AllDone { done, failed } => {
-                    println!("\n=== batch finished: {done} done, {failed} failed ===")
-                }
-            }
-        }
+        print_batch_event(ev, watch);
     })?;
     if !report.failed.is_empty() {
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn print_batch_event(ev: rolen_orchestrator::BatchEvent, watch: bool) {
+    use rolen_orchestrator::BatchEvent::*;
+    if watch {
+        // FR-11.4: NDJSON event stream for external tooling
+        let line = match &ev {
+            TaskStarted { id, role } => {
+                serde_json::json!({"event": "task_started", "id": id, "role": role})
+            }
+            Waiting { id, reason } => {
+                serde_json::json!({"event": "waiting", "id": id, "reason": reason})
+            }
+            TaskDone { id, tokens, steps } => {
+                serde_json::json!({"event": "task_done", "id": id, "tokens": tokens, "steps": steps})
+            }
+            TaskFailed { id, error } => {
+                serde_json::json!({"event": "task_failed", "id": id, "error": error})
+            }
+            Agent { id, line } => serde_json::json!({"event": "agent", "id": id, "line": line}),
+            AllDone { done, failed } => {
+                serde_json::json!({"event": "all_done", "done": done, "failed": failed})
+            }
+        };
+        println!("{line}");
+        return;
+    }
+    match ev {
+        TaskStarted { id, role } => println!("▶ {id} started (role {role})"),
+        Waiting { id, reason } => println!("… {id} waiting: {reason}"),
+        TaskDone { id, tokens, steps } => {
+            println!("✅ {id} done ({steps} steps, {tokens} tokens, checkpoint committed)")
+        }
+        TaskFailed { id, error } => println!("❌ {id} failed: {error}"),
+        Agent { id, line } => println!("[{id}] {line}"),
+        AllDone { done, failed } => {
+            println!("\n=== batch finished: {done} done, {failed} failed ===")
+        }
+    }
 }
 
 // ------------------------------------------------------------------- rules
@@ -940,31 +1039,149 @@ fn rule_cmd(action: RuleAction) -> Result<()> {
                 }
             }
         }
+        RuleAction::Pause { role } => {
+            rolen_core::rules::set_role_paused(&role, true)?;
+            println!(
+                "role '{role}' paused — dispatch fails until `rolen rule resume --role {role}`"
+            );
+        }
+        RuleAction::Resume { role } => {
+            rolen_core::rules::set_role_paused(&role, false)?;
+            println!("role '{role}' resumed");
+        }
     }
     Ok(())
 }
 
 // --------------------------------------------------------------------- run
 
-#[allow(clippy::too_many_arguments)]
-fn run_cmd(
-    role: String,
+/// FR-8.4: Ctrl+C requests a graceful cancel — agents stop between steps and
+/// write a context snapshot (resumable via `rolen run --resume`).
+fn cancel_on_ctrlc() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    let cancel = Arc::new(AtomicBool::new(false));
+    if signal_hook::flag::register(signal_hook::consts::SIGINT, cancel.clone()).is_ok() {
+        eprintln!("(Ctrl+C cancels gracefully between agent steps)");
+    }
+    cancel
+}
+
+struct RunArgs {
+    role: Option<String>,
     task: String,
     workdir: String,
+    project: Option<String>,
+    #[allow(dead_code)] // accepted for CI parity (FR-11.2); run is always headless
+    headless: bool,
     provider: Option<String>,
     model: Option<String>,
     max_steps: usize,
     allow_shell: String,
     json: bool,
-) -> Result<()> {
-    let mut opts = rolen_runtime::AgentOptions {
-        workdir: workdir.into(),
+    resume: Option<String>,
+}
+
+fn run_cmd(a: RunArgs) -> Result<()> {
+    // FR-11.2: with --project, run inside the project workspace and --task
+    // selects a task id from tasks.yaml (omit it to run the whole DAG).
+    if let Some(project) = &a.project {
+        let root = workspace_root()?;
+        let (dir, meta) = rolen_core::project::find_project(&root, project).ok_or_else(|| {
+            anyhow::anyhow!(
+                "project '{project}' not found in {} — run `rolen project list`",
+                root.display()
+            )
+        })?;
+        let spec_path = dir.join("tasks.yaml");
+        let spec = rolen_orchestrator::BatchSpec::load(&spec_path).map_err(|e| {
+            anyhow::anyhow!("{e} — run `rolen project build --name {}` first", meta.id)
+        })?;
+        if a.task.trim().is_empty() {
+            return exec_batch(spec, dir, 0, &a.allow_shell, a.json);
+        }
+        let t = spec
+            .tasks
+            .iter()
+            .find(|t| t.id == a.task)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no task '{}' in {} — ids: {}",
+                    a.task,
+                    spec_path.display(),
+                    spec.tasks
+                        .iter()
+                        .map(|t| t.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+        return run_resolved(ResolvedRun {
+            workdir: dir,
+            role: t.role,
+            task: t.task,
+            expected_paths: t.claimed_paths,
+            task_id: Some(t.id),
+            provider: a.provider.clone().or(t.provider),
+            model: a.model.clone().or(t.model),
+            max_steps: a.max_steps,
+            allow_shell: &a.allow_shell,
+            json: a.json,
+            resume: a.resume.clone(),
+        });
+    }
+
+    let role = a
+        .role
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--role is required (or use --project)"))?;
+    if a.task.trim().is_empty() {
+        anyhow::bail!("--task is required (or use --project)");
+    }
+    run_resolved(ResolvedRun {
+        workdir: a.workdir.clone().into(),
         role,
-        task,
-        provider_override: provider,
-        model_override: model,
-        max_steps,
-        shell_allow: allow_shell
+        task: a.task.clone(),
+        expected_paths: vec![],
+        task_id: None,
+        provider: a.provider.clone(),
+        model: a.model.clone(),
+        max_steps: a.max_steps,
+        allow_shell: &a.allow_shell,
+        json: a.json,
+        resume: a.resume.clone(),
+    })
+}
+
+struct ResolvedRun<'a> {
+    workdir: std::path::PathBuf,
+    role: String,
+    task: String,
+    expected_paths: Vec<String>,
+    task_id: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    max_steps: usize,
+    allow_shell: &'a str,
+    json: bool,
+    resume: Option<String>,
+}
+
+fn run_resolved(r: ResolvedRun) -> Result<()> {
+    let mut opts = rolen_runtime::AgentOptions {
+        workdir: r.workdir,
+        role: r.role,
+        task: r.task,
+        provider_override: r.provider,
+        model_override: r.model,
+        max_steps: r.max_steps,
+        expected_paths: r.expected_paths,
+        task_id: r.task_id,
+        resume: r.resume.map(Into::into),
+        cancel: Some(cancel_on_ctrlc()),
+        shell_allow: r
+            .allow_shell
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -972,6 +1189,7 @@ fn run_cmd(
         ..Default::default()
     };
     // in --json mode, human-readable events go to stderr, result JSON to stdout
+    let json = r.json;
     let log = move |msg: String| {
         if json {
             eprintln!("{msg}")
@@ -999,7 +1217,15 @@ fn run_cmd(
                 if is_error { "✗" } else { "✓" },
                 summary.trim()
             ),
-            Compacted { dropped } => format!("… (context compacted, dropped {dropped} messages)"),
+            Compacted {
+                dropped,
+                summarized,
+            } => format!(
+                "… (context compacted: {dropped} messages {})",
+                if summarized { "summarized" } else { "dropped" }
+            ),
+            Paused => "⏸ paused (context snapshot written)".to_string(),
+            Resumed => "▶ resumed".to_string(),
             Retrying { attempt, reason } => format!("⟳ provider retry {attempt}: {reason}"),
             Migrated { from, to, model } => {
                 format!("⇄ migrated {from} → {to}/{model} (quota/overload fallback)")
@@ -1007,7 +1233,15 @@ fn run_cmd(
             Done(_) => return,
         };
         log(line);
-    })?;
+    });
+    let report = match report {
+        Ok(r) => r,
+        Err(rolen_runtime::error::RuntimeError::Cancelled) => {
+            eprintln!("cancelled — session interrupted; context snapshot kept.");
+            std::process::exit(130);
+        }
+        Err(e) => return Err(e.into()),
+    };
     if json {
         println!(
             "{}",
@@ -1083,6 +1317,24 @@ fn config_cmd(action: ConfigAction) -> Result<()> {
             );
             println!("ledger:          {}", config::ledger_file()?.display());
         }
+        ConfigAction::Export { out } => {
+            let bundle = config::export_setup()?;
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &bundle)?;
+                    println!("setup exported → {path} (secrets excluded)");
+                }
+                None => println!("{bundle}"),
+            }
+        }
+        ConfigAction::Import { from } => {
+            let bundle = std::fs::read_to_string(&from)?;
+            let written = config::import_setup(&bundle)?;
+            println!(
+                "imported: {} (existing files backed up as .bak; re-enter API keys)",
+                written.join(", ")
+            );
+        }
     }
     Ok(())
 }
@@ -1124,7 +1376,13 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
                     format!("{:?}", p.ptype),
                     target,
                     p.models.len(),
-                    if p.key_ref.is_some() { "stored" } else { "-" }
+                    if p.suspended {
+                        "SUSPENDED"
+                    } else if p.key_ref.is_some() {
+                        "stored"
+                    } else {
+                        "-"
+                    }
                 );
             }
         }
@@ -1213,6 +1471,9 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
                 cli_path: cli_path.map(Into::into),
                 key_ref,
                 models: Vec::new(),
+                suspended: false,
+                quota_url: None,
+                quota_json_path: None,
             };
             if !no_discover && ptype != ProviderType::Cli {
                 match providers::client::list_models(&provider) {
@@ -1347,7 +1608,21 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
                 }
             }
         }
-        ProviderAction::Budget { id, tokens, clear } => {
+        ProviderAction::Budget {
+            id,
+            tokens,
+            clear,
+            cycle_start,
+            renewal,
+        } => {
+            if cycle_start.is_some() || renewal.is_some() {
+                providers::quota::set_cycle(
+                    &id,
+                    cycle_start.as_deref().map(parse_date).transpose()?,
+                    renewal.as_deref().map(parse_date).transpose()?,
+                )?;
+                println!("billing cycle dates set for '{id}'");
+            }
             match (clear, tokens) {
                 (true, _) => {
                     if providers::quota::clear_budget(&id)? {
@@ -1361,12 +1636,66 @@ fn provider_cmd(action: ProviderAction) -> Result<()> {
                     println!("manual budget for '{id}': {t} tokens/cycle");
                 }
                 (false, None) => {
-                    anyhow::bail!("pass --tokens <N> to set a budget, or --clear to remove it")
+                    if cycle_start.is_none() && renewal.is_none() {
+                        anyhow::bail!(
+                            "pass --tokens <N>, --cycle-start/--renewal <YYYY-MM-DD>, or --clear"
+                        )
+                    }
                 }
             }
         }
+        ProviderAction::SyncQuota { id } => {
+            let reg = providers::ProviderRegistry::load()?;
+            let p = reg
+                .get(&id)
+                .ok_or_else(|| anyhow::anyhow!("no provider '{id}'"))?
+                .clone();
+            let (used, limit, source) = match p.ptype {
+                rolen_core::types::ProviderType::Cli => {
+                    let (u, l) = rolen_cliadapters::quota::cli_quota(&p)?;
+                    (u, l, rolen_core::types::QuotaSource::Parsed)
+                }
+                _ => {
+                    let (u, l) = providers::client::fetch_quota(&p)?;
+                    (u, l, rolen_core::types::QuotaSource::Api)
+                }
+            };
+            providers::quota::record_synced(&id, used, limit, source)?;
+            match limit {
+                Some(l) => println!(
+                    "{id}: synced — used {used} of {l} ({:.0}% remaining)",
+                    100.0 * (l.saturating_sub(used) as f64 / l as f64)
+                ),
+                None => println!("{id}: synced — used {used} (no limit reported)"),
+            }
+        }
+        ProviderAction::Suspend { id } => {
+            let mut reg = providers::ProviderRegistry::load()?;
+            if !reg.set_suspended(&id, true) {
+                anyhow::bail!("no provider '{id}'");
+            }
+            reg.save()?;
+            println!("provider '{id}' suspended — rule routing skips it (fallbacks engage)");
+        }
+        ProviderAction::Resume { id } => {
+            let mut reg = providers::ProviderRegistry::load()?;
+            if !reg.set_suspended(&id, false) {
+                anyhow::bail!("no provider '{id}'");
+            }
+            reg.save()?;
+            println!("provider '{id}' back in rotation");
+        }
     }
     Ok(())
+}
+
+/// Parse a YYYY-MM-DD date into midnight UTC (FR-4.4 cycle flags).
+fn parse_date(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| anyhow::anyhow!("invalid date '{s}' (want YYYY-MM-DD)"))?;
+    Ok(d.and_hms_opt(0, 0, 0)
+        .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc))
+        .unwrap())
 }
 
 /// FR-1.2 detection: ollama server + known CLI agents on PATH.
@@ -1374,8 +1703,124 @@ fn detect_all() -> Vec<Provider> {
     providers::detect::detect_all()
 }
 
-// -------------------------------------------------------------------- quota
+// --------------------------------------------------------- sessions/export
 
+/// FR-9.1/FR-11.1: list sessions from the ledger, newest first.
+fn sessions_cmd(limit: usize, json: bool) -> Result<()> {
+    let ledger = rolen_core::ledger::Ledger::open_default()?;
+    let mut sessions = ledger.all_sessions()?;
+    if limit > 0 {
+        sessions.truncate(limit);
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        return Ok(());
+    }
+    println!(
+        "{:<22} {:<12} {:<14} {:<20} {:<12} {:>10} {:>9} STARTED",
+        "ID", "ROLE", "PROVIDER", "MODEL", "STATE", "TOKENS", "COST"
+    );
+    for s in &sessions {
+        println!(
+            "{:<22} {:<12} {:<14} {:<20} {:<12} {:>10} {:>8.4}$ {}",
+            s.id,
+            if s.role.is_empty() { "-" } else { &s.role },
+            s.provider_id,
+            s.model.chars().take(20).collect::<String>(),
+            format!("{:?}", s.state).to_lowercase(),
+            s.tokens_in + s.tokens_out,
+            s.cost,
+            s.started.format("%Y-%m-%d %H:%M"),
+        );
+    }
+    Ok(())
+}
+
+/// FR-4.6/FR-11.1: export ledger entries, sessions or tickets as CSV/JSON.
+fn export_cmd(what: &str, format: &str, out: Option<String>) -> Result<()> {
+    let ledger = rolen_core::ledger::Ledger::open_default()?;
+    let json = match format {
+        "json" => true,
+        "csv" => false,
+        other => anyhow::bail!("unknown format '{other}' (want csv or json)"),
+    };
+    let text = match (what, json) {
+        ("ledger", true) => serde_json::to_string_pretty(&ledger.all_entries()?)?,
+        ("sessions", true) => serde_json::to_string_pretty(&ledger.all_sessions()?)?,
+        ("tickets", true) => serde_json::to_string_pretty(&ledger.all_tickets()?)?,
+        ("ledger", false) => {
+            let mut s = String::from(
+                "id,session_id,provider_id,tokens_in,tokens_cached,tokens_cache_write_5m,tokens_cache_write_1h,tokens_out,cost,latency_ms,ts\n",
+            );
+            for e in ledger.all_entries()? {
+                s.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{:.6},{},{}\n",
+                    e.id,
+                    e.session_id,
+                    e.provider_id,
+                    e.usage.input,
+                    e.usage.cache_read,
+                    e.usage.cache_write_5m,
+                    e.usage.cache_write_1h,
+                    e.usage.output,
+                    e.cost,
+                    e.latency_ms.map(|v| v.to_string()).unwrap_or_default(),
+                    e.ts.to_rfc3339(),
+                ));
+            }
+            s
+        }
+        ("sessions", false) => {
+            let mut s =
+                String::from("id,task_id,provider_id,model,role,state,tokens_in,tokens_out,cost,started,transcript_path\n");
+            for x in ledger.all_sessions()? {
+                s.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{:.6},{},{}\n",
+                    x.id,
+                    x.task_id.unwrap_or_default(),
+                    x.provider_id,
+                    x.model,
+                    x.role,
+                    format!("{:?}", x.state).to_lowercase(),
+                    x.tokens_in,
+                    x.tokens_out,
+                    x.cost,
+                    x.started.to_rfc3339(),
+                    x.transcript_path
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                ));
+            }
+            s
+        }
+        ("tickets", false) => {
+            let mut s = String::from("id,task_id,path,op,state,ts\n");
+            for t in ledger.all_tickets()? {
+                s.push_str(&format!(
+                    "{},{},{},{},{},{}\n",
+                    t.id,
+                    t.task_id,
+                    t.path.display(),
+                    format!("{:?}", t.op).to_lowercase(),
+                    format!("{:?}", t.state).to_lowercase(),
+                    t.ts.to_rfc3339(),
+                ));
+            }
+            s
+        }
+        (other, _) => anyhow::bail!("unknown export '{other}' (want ledger, sessions or tickets)"),
+    };
+    match out {
+        Some(path) => {
+            std::fs::write(&path, text)?;
+            println!("exported {what} ({format}) → {path}");
+        }
+        None => print!("{text}"),
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------------- quota
 fn quota_cmd(provider: Option<String>, json: bool) -> Result<()> {
     let ledger = rolen_core::ledger::Ledger::open_default()?;
     let reg = providers::ProviderRegistry::load()?;
