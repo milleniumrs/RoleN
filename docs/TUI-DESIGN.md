@@ -41,7 +41,7 @@ windows/controls (rendered as vector figures in the PDF build). AppCUI model: a 
   - *File*: New Project, Open Workspace, Import/Export Config, Quit
   - *Project*: Run/Pause/Resume, New Task, Interview, Regenerate AGENTS.md, Skills…
   - *Providers*: Add Provider, Detect CLIs, Health Check All, Quota Report
-  - *Rules*: New Rule, Dry-Run, Import YAML
+  - *Rules*: New Rule, Edit Rule, Delete Rule, Dry-Run, Import YAML
   - *Sessions*: Quick Chat, New Task Session, Pause All, Transcripts…
   - *View*: Mission Control, Tile Windows, Theme, Focus Mode
   - *Tools*: Settings, Config Doctor, Logs, Sandbox Allow-Lists
@@ -132,9 +132,12 @@ Tab control with 6 fixed tabs: **Dashboard · Projects · Providers · Rules · 
 │                                            └──────────────────────────────────┘ │
 ```
 
-- Left: rule list (one per role+scope); right: condition builder (comboboxes + numeric
-  fields) and **ordered fallback chain** editor.
-- **Dry-run panel** evaluates the rule against live quota state and explains the choice.
+- Left: rule list (one per role+scope); the editor opens as a modal dialog
+  (Rules ▸ New Rule / Edit Rule, or `Enter` on a row) with a condition builder
+  (comboboxes + validated value field) and an **ordered fallback chain** editor
+  (▲ up / ▼ down / + add / − remove).
+- **Dry-run panel** in the editor evaluates the current (unsaved) form values
+  against live quota state and explains the choice.
 - "YAML ⇄" toggle shows the canonical YAML (decision D2) with live two-way sync.
 
 ### 3.5 Questions tab — Interrogation Center
