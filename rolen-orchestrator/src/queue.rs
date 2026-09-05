@@ -31,12 +31,19 @@ enum Msg {
 pub struct WriteQueue {
     tx: Sender<Msg>,
     depth: Arc<AtomicUsize>,
+    /// FR-7.8 backpressure: submitters block while depth >= cap (0 = unlimited).
+    cap: usize,
     dispatcher: Option<std::thread::JoinHandle<()>>,
 }
 
 impl WriteQueue {
     /// `root` is the workspace every ticket path is sandboxed to.
     pub fn new(root: PathBuf) -> Arc<Self> {
+        Self::with_capacity(root, 0)
+    }
+
+    /// `cap` bounds pending tickets (FR-7.8); 0 = unlimited.
+    pub fn with_capacity(root: PathBuf, cap: usize) -> Arc<Self> {
         let (tx, rx) = channel::<Msg>();
         let depth = Arc::new(AtomicUsize::new(0));
         let worker_tx = tx.clone();
@@ -44,13 +51,18 @@ impl WriteQueue {
         Arc::new(Self {
             tx,
             depth,
+            cap,
             dispatcher: Some(dispatcher),
         })
     }
 
     /// Submit a ticket; the returned handle waits for the verdict.
+    /// Blocks while the queue is at capacity (backpressure, FR-7.8).
     pub fn submit(&self, mut ticket: WriteTicket) -> TicketHandle {
         ticket.state = TicketState::Queued;
+        while self.cap > 0 && self.depth.load(Ordering::Relaxed) >= self.cap {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         self.depth.fetch_add(1, Ordering::Relaxed);
         let (rtx, rrx) = channel();
         // journal the submission (best-effort; queue must not fail on db errors)
@@ -202,9 +214,12 @@ fn apply_ticket(root: &Path, ticket: &WriteTicket) -> TicketState {
     };
 
     // optimistic concurrency: the ticket must name the file version it was
-    // based on (None = "file did not exist")
+    // based on (None = "file did not exist"). Patch tickets skip this check:
+    // their hunks do their own context matching, which doubles as the FR-7.9
+    // 3-way merge attempt against the current content.
     let current = content_hash(&path);
     let stale = match (&ticket.base_hash, &current) {
+        _ if matches!(ticket.op, WriteOp::Patch) => false,
         (None, None) => false,
         (Some(want), Some(got)) if want == got => false,
         // no base hash supplied → accept but we are overwriting blind
@@ -235,7 +250,22 @@ fn apply_ticket(root: &Path, ticket: &WriteTicket) -> TicketState {
             Ok(target) => std::fs::rename(&path, &target),
             Err(_) => return TicketState::Rejected,
         },
-        WriteOp::Patch => return TicketState::Rejected, // P1 (FR-7.9)
+        // FR-7.9: unified-diff ticket, applied with fuzzy 3-way context
+        // matching; rejects (nothing written) when a hunk fails
+        WriteOp::Patch => {
+            let old = std::fs::read_to_string(&path).unwrap_or_default();
+            match rolen_core::patch::apply_patch(&old, &ticket.payload) {
+                Some(new) => (|| {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let tmp = path.with_extension("rolen-tmp");
+                    std::fs::write(&tmp, new)?;
+                    std::fs::rename(&tmp, &path)
+                })(),
+                None => return TicketState::Rejected,
+            }
+        }
     };
     match result {
         Ok(()) => TicketState::Applied,
@@ -335,6 +365,40 @@ mod tests {
         for i in 0..10 {
             assert!(dir.join(format!("f{i}.txt")).exists());
         }
+        q.shutdown();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn patch_tickets_merge_disjoint_edits() {
+        // FR-7.9: a patch based on a stale file version still applies when
+        // its context is intact elsewhere (the 3-way merge attempt)
+        let dir = testdir("patch");
+        let q = WriteQueue::new(dir.clone());
+        let s = q.submit(ticket("t1", "f.txt", "a\nb\nc\n", None)).wait();
+        assert_eq!(s, TicketState::Applied);
+
+        // patch written against "a\nb\nc\n", but the file has changed at the top
+        let mut p = ticket("t2", "f.txt", "@@ -2,3 +2,3 @@\n a\n-b\n+B\n c\n", None);
+        p.op = WriteOp::Patch;
+        std::fs::write(dir.join("f.txt"), "top\na\nb\nc\n").unwrap();
+        let s = q.submit(p).wait();
+        assert_eq!(s, TicketState::Applied);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "top\na\nB\nc\n"
+        );
+
+        // a patch whose context is gone is rejected without touching the file
+        let mut bad = ticket("t3", "f.txt", "@@ -1,1 +1,1 @@\n-nope\n+x\n", None);
+        bad.op = WriteOp::Patch;
+        let s = q.submit(bad).wait();
+        assert_eq!(s, TicketState::Rejected);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "top\na\nB\nc\n"
+        );
+
         q.shutdown();
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -107,11 +107,17 @@ impl WriteSink for DirectWriteSink {
                 std::fs::rename(&path, &target)?;
             }
             WriteOp::Patch => {
-                // full 3-way patch tickets are P1 (FR-7.9); for M2 the agent
-                // is told to send full content instead
-                return Err(RuntimeError::Sandbox(
-                    "patch tickets not supported yet — submit full content (replace)".into(),
-                ));
+                // FR-7.9: unified-diff ticket with fuzzy 3-way context match
+                let old = std::fs::read_to_string(&path).unwrap_or_default();
+                let Some(new) = rolen_core::patch::apply_patch(&old, &ticket.payload) else {
+                    return Ok(TicketState::Rejected);
+                };
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let tmp = path.with_extension("rolen-tmp");
+                std::fs::write(&tmp, new)?;
+                std::fs::rename(&tmp, &path)?;
             }
         }
         Ok(TicketState::Applied)

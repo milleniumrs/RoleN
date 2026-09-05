@@ -29,9 +29,18 @@ pub struct AgentOptions {
     pub sink: Option<Box<dyn crate::sink::WriteSink>>,
     /// Cooperative cancellation: checked between agent steps.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Cooperative pause (FR-8.4): while set, the loop waits between steps,
+    /// the session is marked Paused and its context is snapshotted.
+    pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Resume from a context snapshot written by a previous paused/cancelled
+    /// session (FR-8.4): replaces the initial system+task history.
+    pub resume: Option<PathBuf>,
     /// Files the task is expected to produce (claimed paths). The agent is
     /// nudged until they exist (or nudges run out).
     pub expected_paths: Vec<String>,
+    /// Project directory (holds rolen-project.yaml) for ask_user question
+    /// recording (FR-6.3). Auto-detected from workdir when None.
+    pub project_dir: Option<PathBuf>,
 }
 
 pub enum AgentEvent {
@@ -53,7 +62,10 @@ pub enum AgentEvent {
     },
     Compacted {
         dropped: usize,
+        summarized: bool,
     },
+    Paused,
+    Resumed,
     Retrying {
         attempt: u32,
         reason: String,
@@ -116,6 +128,31 @@ const CHARS_PER_TOKEN: usize = 4;
 /// Compact when estimated history exceeds this many tokens (FR-12.3 basic).
 const COMPACT_AT_TOKENS: usize = 24_000;
 
+/// FR-8.4: context snapshots live in `<data dir>/snapshots/<session>.json`.
+pub fn snapshot_path(session_id: &str) -> Option<PathBuf> {
+    let dir = rolen_core::config::data_dir().ok()?.join("snapshots");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join(format!("{session_id}.json")))
+}
+
+fn write_snapshot(session_id: &str, history: &[HistMsg]) -> Result<PathBuf, RuntimeError> {
+    let path = snapshot_path(session_id)
+        .ok_or_else(|| RuntimeError::Sandbox("no data dir for snapshot".into()))?;
+    let text = serde_json::to_string_pretty(history)
+        .map_err(|e| RuntimeError::Sandbox(format!("snapshot serialize: {e}")))?;
+    std::fs::write(&path, text)?;
+    Ok(path)
+}
+
+fn clear_snapshot(session_id: &str) -> Result<(), RuntimeError> {
+    if let Some(path) = snapshot_path(session_id) {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn run(
     opts: &mut AgentOptions,
     on_event: &mut dyn FnMut(AgentEvent),
@@ -145,19 +182,90 @@ pub fn run(
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
     let ledger = Ledger::open_default()?;
+    // FR-9.3: every session writes a transcript (markdown-ish log), so the
+    // TUI transcript viewer and exports work for built-in runtime sessions
+    // too — not just wrapped CLI ones.
+    let transcript_path = rolen_core::config::data_dir()
+        .ok()
+        .map(|d| d.join("transcripts").join(format!("{session_id}.md")));
+    let mut transcript: Option<std::fs::File> = transcript_path.as_ref().and_then(|p| {
+        std::fs::create_dir_all(p.parent()?).ok()?;
+        let mut f = std::fs::File::create(p).ok()?;
+        use std::io::Write;
+        writeln!(
+            f,
+            "# session {session_id} — role: {} \n\ntask: {}\n",
+            opts.role, opts.task
+        )
+        .ok()
+        .map(|_| f)
+    });
     let mut session = Session {
         id: session_id.clone(),
         task_id: None,
         provider_id: provider_id.clone(),
         model: model.clone(),
+        role: opts.role.clone(),
         state: SessionState::Running,
         tokens_in: 0,
         tokens_out: 0,
         cost: 0.0,
         started: chrono::Utc::now(),
-        transcript_path: None,
+        transcript_path: transcript_path.clone(),
     };
     ledger.upsert_session(&session)?;
+
+    // emit = record the event into the transcript, then report it upward
+    let mut emit = |ev: AgentEvent, transcript: &mut Option<std::fs::File>| {
+        if let Some(f) = transcript {
+            use std::io::Write;
+            let line = match &ev {
+                AgentEvent::Routed {
+                    provider,
+                    model,
+                    explanation,
+                    ..
+                } => Some(format!("\n## routed → {provider}/{model}\n{explanation}\n")),
+                AgentEvent::Text(t) => Some(format!("\n{t}\n")),
+                AgentEvent::ToolCall { name, summary } => {
+                    Some(format!("\n### tool: {name}\n`{summary}`\n"))
+                }
+                AgentEvent::ToolDone {
+                    name,
+                    is_error,
+                    summary,
+                } => Some(format!(
+                    "**{} {name}**: {}\n",
+                    if *is_error { "✗" } else { "✓" },
+                    summary
+                )),
+                AgentEvent::Compacted {
+                    dropped,
+                    summarized,
+                } => Some(format!(
+                    "\n*(context compacted: {dropped} messages {})*\n",
+                    if *summarized {
+                        "summarized by the model"
+                    } else {
+                        "dropped"
+                    }
+                )),
+                AgentEvent::Paused => Some("\n*(paused — snapshot written)*\n".into()),
+                AgentEvent::Resumed => Some("\n*(resumed)*\n".into()),
+                AgentEvent::Retrying { attempt, reason } => {
+                    Some(format!("\n*(retry {attempt}: {reason})*\n"))
+                }
+                AgentEvent::Migrated { from, to, model } => {
+                    Some(format!("\n## migrated {from} → {to}/{model}\n"))
+                }
+                AgentEvent::Done(text) => Some(format!("\n## done\n{text}\n")),
+            };
+            if let Some(line) = line {
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+        on_event(ev);
+    };
 
     let tool_ctx = ToolContext {
         workdir: opts.workdir.clone(),
@@ -167,12 +275,24 @@ pub fn run(
             .take()
             .unwrap_or_else(|| Box::new(DirectWriteSink::new(opts.workdir.clone()))),
         task_id: opts.task_id.clone().unwrap_or_else(|| session_id.clone()),
+        project_dir: opts
+            .project_dir
+            .clone()
+            .or_else(|| rolen_core::project::find_project_dir_upwards(&opts.workdir)),
     };
 
-    let mut history: Vec<HistMsg> = vec![
-        HistMsg::System(system_prompt(&opts.role)),
-        HistMsg::User(opts.task.clone()),
-    ];
+    let mut history: Vec<HistMsg> = match &opts.resume {
+        // FR-8.4: resume from a context snapshot of a paused/interrupted session
+        Some(path) => {
+            let text = std::fs::read_to_string(path)?;
+            serde_json::from_str(&text)
+                .map_err(|e| RuntimeError::Sandbox(format!("snapshot {}: {e}", path.display())))?
+        }
+        None => vec![
+            HistMsg::System(system_prompt(&opts.role)),
+            HistMsg::User(opts.task.clone()),
+        ],
+    };
 
     let mut steps = 0;
     let mut nudges = 0;
@@ -197,7 +317,43 @@ pub fn run(
             break Err(RuntimeError::Cancelled);
         }
 
-        maybe_compact(&mut history, on_event);
+        // FR-8.4 pause: wait between steps with the context snapshotted, so a
+        // paused session can survive a restart and be resumed later.
+        if let Some(pause) = &opts.pause {
+            let mut was_paused = false;
+            while pause.load(std::sync::atomic::Ordering::Relaxed) {
+                if opts
+                    .cancel
+                    .as_ref()
+                    .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                if !was_paused {
+                    was_paused = true;
+                    session.state = SessionState::Paused;
+                    let _ = ledger.upsert_session(&session);
+                    let _ = write_snapshot(&session_id, &history);
+                    emit(AgentEvent::Paused, &mut transcript);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            if was_paused {
+                session.state = SessionState::Running;
+                let _ = ledger.upsert_session(&session);
+                emit(AgentEvent::Resumed, &mut transcript);
+            }
+        }
+
+        maybe_compact(
+            &mut history,
+            &provider,
+            &model,
+            &ledger,
+            &session_id,
+            &mut |ev| emit(ev, &mut transcript),
+        );
 
         // ---- LLM call with retry + mid-session migration (FR-3.3) ----
         let resp: Result<_, RuntimeError> = 'call: {
@@ -218,10 +374,13 @@ pub fn run(
                         if is_retryable(&e) {
                             if attempt < 3 {
                                 attempt += 1;
-                                on_event(AgentEvent::Retrying {
-                                    attempt,
-                                    reason: e.to_string().chars().take(120).collect(),
-                                });
+                                emit(
+                                    AgentEvent::Retrying {
+                                        attempt,
+                                        reason: e.to_string().chars().take(120).collect(),
+                                    },
+                                    &mut transcript,
+                                );
                                 std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
                                 continue;
                             }
@@ -233,11 +392,14 @@ pub fn run(
                                 if let Some((new_provider, new_model)) =
                                     migrate(&opts.role, &provider_id, &reg)
                                 {
-                                    on_event(AgentEvent::Migrated {
-                                        from: provider_id.clone(),
-                                        to: new_provider.id.clone(),
-                                        model: new_model.clone(),
-                                    });
+                                    emit(
+                                        AgentEvent::Migrated {
+                                            from: provider_id.clone(),
+                                            to: new_provider.id.clone(),
+                                            model: new_model.clone(),
+                                        },
+                                        &mut transcript,
+                                    );
                                     provider_id = new_provider.id.clone();
                                     model = new_model;
                                     provider = new_provider;
@@ -276,7 +438,7 @@ pub fn run(
         let _ = ledger.upsert_session(&session);
 
         if !resp.text.is_empty() {
-            on_event(AgentEvent::Text(resp.text.clone()));
+            emit(AgentEvent::Text(resp.text.clone()), &mut transcript);
         }
 
         // Salvage: some models emit tool calls as JSON *text* instead of
@@ -336,16 +498,22 @@ pub fn run(
 
         let mut outcomes = Vec::new();
         for call in &tool_calls {
-            on_event(AgentEvent::ToolCall {
-                name: call.name.clone(),
-                summary: summarize_call(call),
-            });
+            emit(
+                AgentEvent::ToolCall {
+                    name: call.name.clone(),
+                    summary: summarize_call(call),
+                },
+                &mut transcript,
+            );
             let outcome = tools::execute(&tool_ctx, call);
-            on_event(AgentEvent::ToolDone {
-                name: call.name.clone(),
-                is_error: outcome.is_error,
-                summary: outcome.content.chars().take(200).collect(),
-            });
+            emit(
+                AgentEvent::ToolDone {
+                    name: call.name.clone(),
+                    is_error: outcome.is_error,
+                    summary: outcome.content.chars().take(200).collect(),
+                },
+                &mut transcript,
+            );
             outcomes.push(outcome);
         }
         history.push(HistMsg::ToolResults(outcomes));
@@ -355,7 +523,15 @@ pub fn run(
         Ok(text) => {
             session.state = SessionState::Done;
             let _ = ledger.upsert_session(&session);
-            on_event(AgentEvent::Done(text.clone()));
+            let _ = clear_snapshot(&session_id);
+            emit(AgentEvent::Done(text.clone()), &mut transcript);
+        }
+        Err(RuntimeError::Cancelled) => {
+            // NFR-3: interrupted sessions stay recoverable — the context
+            // snapshot lets the user resume with `rolen run --resume`.
+            session.state = SessionState::Interrupted;
+            let _ = ledger.upsert_session(&session);
+            let _ = write_snapshot(&session_id, &history);
         }
         Err(_) => {
             session.state = SessionState::Failed;
@@ -521,10 +697,20 @@ fn salvage_tool_calls(text: &str) -> Vec<ToolCall> {
     out
 }
 
-/// Deterministic context compaction (basic FR-12.3; LLM-summarized hand-off
-/// arrives with the session-migration work). Keeps system + task + the most
-/// recent exchanges.
-fn maybe_compact(history: &mut Vec<HistMsg>, on_event: &mut dyn FnMut(AgentEvent)) {
+/// Context compaction (FR-12.3): when the estimated history size approaches
+/// the context window, the middle messages (everything except system + task +
+/// the most recent exchanges) are handed to the LLM for a structured summary,
+/// which stays in the history as a system note. Falls back to dropping the
+/// messages with a marker when the summarization call fails.
+/// The summary call itself is ledgered like any other (FR-4.6).
+fn maybe_compact(
+    history: &mut Vec<HistMsg>,
+    provider: &rolen_core::types::Provider,
+    model: &str,
+    ledger: &Ledger,
+    session_id: &str,
+    on_event: &mut dyn FnMut(AgentEvent),
+) {
     let estimate = |h: &[HistMsg]| -> usize {
         h.iter()
             .map(|m| match m {
@@ -551,15 +737,101 @@ fn maybe_compact(history: &mut Vec<HistMsg>, on_event: &mut dyn FnMut(AgentEvent
         return;
     }
     let tail: Vec<HistMsg> = history.split_off(history.len() - keep_tail);
-    history.truncate(keep_head);
-    history.push(HistMsg::System(format!(
-        "[compaction] {drop_count} earlier messages (tool calls/results) were dropped to fit the context window. \
-         Re-read files with tools if you need their content again."
-    )));
+    let dropped: Vec<HistMsg> = history.split_off(keep_head); // history = head now
+
+    // try the LLM-summarized hand-off first
+    let note = match summarize_dropped(provider, model, &dropped, ledger, session_id) {
+        Some(summary) => {
+            on_event(AgentEvent::Compacted {
+                dropped: drop_count,
+                summarized: true,
+            });
+            format!(
+                "[summary of earlier work — {drop_count} messages condensed by the model]\n{summary}"
+            )
+        }
+        None => {
+            on_event(AgentEvent::Compacted {
+                dropped: drop_count,
+                summarized: false,
+            });
+            format!(
+                "[compaction] {drop_count} earlier messages (tool calls/results) were dropped to fit the context window. \
+                 Re-read files with tools if you need their content again."
+            )
+        }
+    };
+    history.push(HistMsg::System(note));
     history.extend(tail);
-    on_event(AgentEvent::Compacted {
-        dropped: drop_count,
+}
+
+/// FR-12.3: ask the current model to condense the dropped middle into a
+/// hand-off note (goal, decisions, files touched, open questions, next steps).
+fn summarize_dropped(
+    provider: &rolen_core::types::Provider,
+    model: &str,
+    dropped: &[HistMsg],
+    ledger: &Ledger,
+    session_id: &str,
+) -> Option<String> {
+    let mut excerpt = String::new();
+    for m in dropped {
+        let (role, text) = match m {
+            HistMsg::System(s) => ("system", s.clone()),
+            HistMsg::User(s) => ("user", s.clone()),
+            HistMsg::Assistant { text, tool_calls } => {
+                let mut t = text.clone();
+                for c in tool_calls {
+                    t.push_str(&format!(
+                        "\n[tool {}: {}]",
+                        c.name,
+                        c.args.to_string().chars().take(200).collect::<String>()
+                    ));
+                }
+                ("assistant", t)
+            }
+            HistMsg::ToolResults(rs) => (
+                "tool",
+                rs.iter()
+                    .map(|r| r.content.chars().take(300).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        };
+        excerpt.push_str(&format!(
+            "\n--- {role} ---\n{}\n",
+            text.chars().take(2000).collect::<String>()
+        ));
+    }
+    let prompt = format!(
+        "Condense this agent conversation excerpt into a hand-off note (max 250 words) with sections: \
+         GOAL, DECISIONS MADE, FILES TOUCHED, OPEN QUESTIONS, NEXT STEPS. Be factual, keep file paths.\n{excerpt}"
+    );
+    let resp = providers::client::chat(
+        provider,
+        &rolen_providers::chat::ChatRequest::conversation(
+            model,
+            vec![rolen_providers::chat::ChatMessage::user(prompt)],
+            800,
+        ),
+    )
+    .ok()?;
+    // the summary call costs tokens too — ledger it (FR-4.6)
+    let cost = providers::test::estimate_cost(provider, model, resp.usage);
+    let _ = ledger.record(&rolen_core::types::LedgerEntry {
+        id: format!(
+            "le-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ),
+        session_id: session_id.to_string(),
+        provider_id: provider.id.clone(),
+        usage: resp.usage,
+        cost,
+        latency_ms: Some(resp.latency_ms),
+        ts: chrono::Utc::now(),
     });
+    let text = resp.text.trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(test)]
@@ -591,5 +863,82 @@ then
     fn ignores_unknown_names_and_plain_text() {
         assert!(salvage_tool_calls("just a normal answer").is_empty());
         assert!(salvage_tool_calls(r#"{"name": "write_file", "arguments": {}}"#).is_empty());
+    }
+
+    #[test]
+    fn history_snapshot_roundtrips_as_json() {
+        // FR-8.4: pause/cancel snapshots must survive a restart
+        let history = vec![
+            HistMsg::System("sys".into()),
+            HistMsg::User("task".into()),
+            HistMsg::Assistant {
+                text: "working".into(),
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    name: "read_file".into(),
+                    args: serde_json::json!({"path": "a.txt"}),
+                }],
+            },
+            HistMsg::ToolResults(vec![rolen_providers::chat::ToolOutcome {
+                id: "c1".into(),
+                name: "read_file".into(),
+                content: "hi".into(),
+                is_error: false,
+            }]),
+        ];
+        let text = serde_json::to_string_pretty(&history).unwrap();
+        let back: Vec<HistMsg> = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.len(), 4);
+        assert!(matches!(back[2], HistMsg::Assistant { .. }));
+    }
+
+    #[test]
+    fn compaction_falls_back_to_dropping_when_llm_unreachable() {
+        // FR-12.3: without a reachable model the compaction must still shrink
+        // the history (drop fallback), keeping head (system+task) and tail
+        let provider = rolen_core::types::Provider {
+            id: "test".into(),
+            ptype: rolen_core::types::ProviderType::Api,
+            auth: Default::default(),
+            tunnel: None,
+            endpoint: Some("http://127.0.0.1:9".into()), // nothing listens here
+            cli_path: None,
+            key_ref: None,
+            models: vec![],
+            suspended: false,
+            quota_url: None,
+            quota_json_path: None,
+        };
+        let big = "x".repeat(20_000);
+        let mut history = vec![
+            HistMsg::System("sys".into()),
+            HistMsg::User("the task".into()),
+        ];
+        for _ in 0..12 {
+            history.push(HistMsg::Assistant {
+                text: big.clone(),
+                tool_calls: vec![],
+            });
+            history.push(HistMsg::ToolResults(vec![
+                rolen_providers::chat::ToolOutcome {
+                    id: "c".into(),
+                    name: "read_file".into(),
+                    content: big.clone(),
+                    is_error: false,
+                },
+            ]));
+        }
+        let ledger_dir = std::env::temp_dir().join(format!("rolen-compact-{}", std::process::id()));
+        std::fs::create_dir_all(&ledger_dir).unwrap();
+        let ledger = Ledger::open(&ledger_dir.join("l.sqlite3")).unwrap();
+        let mut events = 0;
+        maybe_compact(&mut history, &provider, "m", &ledger, "s-test", &mut |_| {
+            events += 1
+        });
+        // head (2) + note (1) + tail (6)
+        assert_eq!(history.len(), 9);
+        assert!(matches!(&history[2], HistMsg::System(s) if s.contains("[compaction]")));
+        assert_eq!(events, 1);
+        std::fs::remove_dir_all(&ledger_dir).ok();
     }
 }
