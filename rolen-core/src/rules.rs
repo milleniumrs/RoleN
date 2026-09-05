@@ -79,6 +79,50 @@ pub struct EvalContext {
     pub providers: HashMap<String, ProviderState>,
 }
 
+// ----------------------------------------------------------- paused roles
+
+/// FR-4.5 pause-role alert action: paused roles fail dispatch until resumed
+/// (`rolen rule resume --role X`), instead of being rerouted to fallbacks.
+mod paused {
+    use crate::config;
+    use crate::error::CoreError;
+    use std::path::PathBuf;
+
+    fn file() -> Result<PathBuf, CoreError> {
+        Ok(config::data_dir()?.join("paused_roles.yaml"))
+    }
+
+    pub fn load() -> Vec<String> {
+        let Ok(f) = file() else { return Vec::new() };
+        std::fs::read_to_string(f)
+            .ok()
+            .and_then(|t| serde_yaml::from_str::<Vec<String>>(&t).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn is_paused(role: &str) -> bool {
+        load().iter().any(|r| r == role)
+    }
+
+    pub fn set(role: &str, paused: bool) -> Result<(), CoreError> {
+        let mut roles = load();
+        roles.retain(|r| r != role);
+        if paused {
+            roles.push(role.to_string());
+        }
+        roles.sort();
+        let text = serde_yaml::to_string(&roles)
+            .map_err(|e| CoreError::Vault(format!("paused_roles serialize: {e}")))?;
+        std::fs::write(file()?, text)?;
+        Ok(())
+    }
+}
+
+pub use paused::{is_paused as is_role_paused, set as set_role_paused};
+pub fn paused_roles() -> Vec<String> {
+    paused::load()
+}
+
 // --------------------------------------------------------------- decision
 
 #[derive(Debug, Clone)]
@@ -98,6 +142,14 @@ pub enum RuleError {
 }
 
 pub fn decide(rules: &RuleSet, role: &str, ctx: &EvalContext) -> Result<Decision, RuleError> {
+    if is_role_paused(role) {
+        return Err(RuleError::NoRoute {
+            role: role.into(),
+            reason: format!(
+                "role paused by the quota alert action — resume with `rolen rule resume --role {role}`"
+            ),
+        });
+    }
     let candidates = rules.for_role(role);
     if candidates.is_empty() {
         return Err(RuleError::NoRoute {

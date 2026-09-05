@@ -118,6 +118,74 @@ pub fn find_project(root: &Path, name: &str) -> Option<(PathBuf, ProjectMeta)> {
         .find(|(_, m)| m.id == name || m.name.eq_ignore_ascii_case(name))
 }
 
+/// Walk up from `start` looking for a directory holding PROJECT_FILE.
+/// Lets agents/batches running inside a project workspace find their project.
+pub fn find_project_dir_upwards(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if d.join(PROJECT_FILE).exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// Serializes read-modify-write cycles on PROJECT_FILE within this process
+/// (several agent threads may record questions concurrently).
+static QUESTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// FR-6.3: record a mid-project clarification raised by an agent (`ask_user`
+/// tool) as a pending question in the project's metadata, where the TUI
+/// interrogation center and the scheduler can see it.
+pub fn record_question(
+    dir: &Path,
+    task_id: Option<&str>,
+    question: &str,
+) -> Result<Clarification, CoreError> {
+    let _guard = QUESTION_LOCK
+        .lock()
+        .map_err(|_| CoreError::Vault("question lock poisoned".into()))?;
+    let mut meta = ProjectMeta::load(dir)?;
+    let clarification = crate::types::Clarification {
+        id: format!(
+            "mq-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ),
+        project_id: meta.id.clone(),
+        task_id: task_id.map(str::to_string),
+        question: question.to_string(),
+        options: Vec::new(),
+        answer: None,
+        status: crate::types::ClarificationStatus::Pending,
+        linked_prd_path: None,
+        ts: chrono::Utc::now(),
+    };
+    meta.clarifications.push(clarification.clone());
+    // atomic write: temp file + rename, so a crash never halves the YAML
+    let target = dir.join(PROJECT_FILE);
+    let tmp = dir.join(format!(".{PROJECT_FILE}.tmp"));
+    let text = serde_yaml::to_string(&meta)
+        .map_err(|e| CoreError::Vault(format!("{PROJECT_FILE} serialize: {e}")))?;
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &target)?;
+    Ok(clarification)
+}
+
+/// Task ids that currently have unanswered (pending) questions in this project.
+/// The scheduler pauses tasks that depend on these (FR-6.3).
+pub fn pending_question_task_ids(dir: &Path) -> std::collections::HashSet<String> {
+    ProjectMeta::load(dir)
+        .map(|m| {
+            m.clarifications
+                .iter()
+                .filter(|c| c.status == crate::types::ClarificationStatus::Pending)
+                .filter_map(|c| c.task_id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ------------------------------------------------------------------- PRD
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -568,5 +636,37 @@ mod tests {
     fn skill_suggestion_matches_stack() {
         let skills = suggest_skills(&meta(), &prd(), 3);
         assert!(skills.iter().any(|s| s.name == "rust-workspace"));
+    }
+
+    #[test]
+    fn record_question_appends_pending_and_is_visible_to_scheduler() {
+        let dir = std::env::temp_dir().join(format!("rolen-recq-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        meta().save(&dir).unwrap();
+
+        let c = record_question(&dir, Some("task-a"), "Which DB engine?").unwrap();
+        assert_eq!(c.status, crate::types::ClarificationStatus::Pending);
+        assert_eq!(c.task_id.as_deref(), Some("task-a"));
+
+        let pending = pending_question_task_ids(&dir);
+        assert!(pending.contains("task-a"));
+
+        // answering the question unblocks the dependent tasks
+        let mut m = ProjectMeta::load(&dir).unwrap();
+        m.clarifications[0].status = crate::types::ClarificationStatus::Answered;
+        m.save(&dir).unwrap();
+        assert!(pending_question_task_ids(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finds_project_dir_walking_upwards() {
+        let dir = std::env::temp_dir().join(format!("rolen-upwards-{}", std::process::id()));
+        let nested = dir.join("sub").join("dir");
+        std::fs::create_dir_all(&nested).unwrap();
+        meta().save(&dir).unwrap();
+        assert_eq!(find_project_dir_upwards(&nested), Some(dir.clone()));
+        assert!(find_project_dir_upwards(std::path::Path::new("C:\\")).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
