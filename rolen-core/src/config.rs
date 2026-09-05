@@ -13,6 +13,9 @@ pub struct General {
     pub workspace_root: PathBuf,
     pub theme: String,
     pub question_mode: QuestionMode,
+    /// FR-9.4: also send quota/task alerts as OS toast notifications (opt-in).
+    #[serde(default)]
+    pub os_notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +24,14 @@ pub struct Parallelism {
     pub global_cap: usize,
     /// Max concurrent sessions per provider.
     pub per_provider_cap: usize,
+    /// FR-7.8 backpressure: max write tickets pending in the queue before
+    /// submitters block. 0 = unlimited.
+    #[serde(default = "default_queue_cap")]
+    pub queue_cap: usize,
+}
+
+fn default_queue_cap() -> usize {
+    1000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,10 +58,12 @@ impl Default for Config {
                 workspace_root,
                 theme: "dark".into(),
                 question_mode: QuestionMode::Thorough,
+                os_notifications: false,
             },
             parallelism: Parallelism {
                 global_cap: 0,
                 per_provider_cap: 2,
+                queue_cap: default_queue_cap(),
             },
             quotas: Quotas {
                 warn_pct: 80,
@@ -112,6 +125,69 @@ pub fn pricing_file() -> Result<PathBuf, CoreError> {
 
 pub fn ledger_file() -> Result<PathBuf, CoreError> {
     Ok(data_dir()?.join("ledger.sqlite3"))
+}
+
+// ------------------------------------------------- setup import / export
+
+/// Files included in a setup export (FR-14.4). Secrets are never included —
+/// config holds only keychain references, which stay valid on this machine.
+pub const EXPORT_FILES: &[&str] = &[
+    "config.toml",
+    "providers.toml",
+    "rules.yaml",
+    "subscriptions.toml",
+    "pricing.toml",
+];
+
+/// Export the setup as one JSON bundle: `{schema, files: {name: content}}`.
+pub fn export_setup() -> Result<String, CoreError> {
+    let dir = config_dir()?;
+    let mut files = serde_json::Map::new();
+    for name in EXPORT_FILES {
+        let path = dir.join(name);
+        if path.exists() {
+            let text = fs::read_to_string(&path)
+                .map_err(|e| CoreError::Vault(format!("export {}: {e}", path.display())))?;
+            files.insert(name.to_string(), serde_json::Value::String(text));
+        }
+    }
+    let bundle = serde_json::json!({
+        "schema": 1,
+        "app": "rolen",
+        "exported": chrono::Utc::now().to_rfc3339(),
+        "secrets": "excluded — keychain references only; re-enter keys on the target machine",
+        "files": files,
+    });
+    serde_json::to_string_pretty(&bundle)
+        .map_err(|e| CoreError::Vault(format!("export serialize: {e}")))
+}
+
+/// Import a bundle produced by [`export_setup`]. Existing files are backed up
+/// next to the new ones (`<name>.bak`). Secrets are untouched.
+pub fn import_setup(bundle: &str) -> Result<Vec<String>, CoreError> {
+    let v: serde_json::Value =
+        serde_json::from_str(bundle).map_err(|e| CoreError::Vault(format!("import parse: {e}")))?;
+    let files = v["files"]
+        .as_object()
+        .ok_or_else(|| CoreError::Vault("import: missing 'files' object".into()))?;
+    let dir = config_dir()?;
+    fs::create_dir_all(&dir)?;
+    let mut written = Vec::new();
+    for (name, content) in files {
+        if !EXPORT_FILES.contains(&name.as_str()) {
+            continue; // refuse to write anything outside the known set
+        }
+        let Some(text) = content.as_str() else {
+            continue;
+        };
+        let path = dir.join(name);
+        if path.exists() {
+            fs::copy(&path, dir.join(format!("{name}.bak")))?;
+        }
+        fs::write(&path, text)?;
+        written.push(name.clone());
+    }
+    Ok(written)
 }
 
 /// Create config + data directories if missing. Returns the dirs.

@@ -4,7 +4,7 @@ use crate::config;
 use crate::error::CoreError;
 use crate::types::LedgerEntry;
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS ledger_entries (
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     task_id         TEXT,
     provider_id     TEXT NOT NULL,
     model           TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT '',
     state           TEXT NOT NULL,
     tokens_in       INTEGER NOT NULL DEFAULT 0,
     tokens_out      INTEGER NOT NULL DEFAULT 0,
@@ -91,6 +92,11 @@ impl Ledger {
                 ))?;
             }
         }
+        // sessions gained a role column (FR-9.1) after the table existed
+        if !self.has_column("sessions", "role")? {
+            self.conn
+                .execute_batch("ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT ''")?;
+        }
         Ok(())
     }
 
@@ -141,12 +147,13 @@ impl Ledger {
     pub fn upsert_session(&self, s: &crate::types::Session) -> Result<(), CoreError> {
         self.conn.execute(
             "INSERT INTO sessions
-             (id, task_id, provider_id, model, state, tokens_in, tokens_out, cost, started, transcript_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             (id, task_id, provider_id, model, role, state, tokens_in, tokens_out, cost, started, transcript_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                task_id = excluded.task_id,
                provider_id = excluded.provider_id,
                model = excluded.model,
+               role = excluded.role,
                state = excluded.state,
                tokens_in = excluded.tokens_in,
                tokens_out = excluded.tokens_out,
@@ -157,6 +164,7 @@ impl Ledger {
                 s.task_id,
                 s.provider_id,
                 s.model,
+                s.role,
                 format!("{:?}", s.state).to_lowercase(),
                 s.tokens_in,
                 s.tokens_out,
@@ -177,35 +185,48 @@ impl Ledger {
         Ok(n as u64)
     }
 
+    /// Live write-queue depth (FR-7.8): tickets submitted but not yet
+    /// applied/rejected — visible across processes via the journal.
+    pub fn queued_ticket_count(&self) -> Result<u64, CoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM write_tickets WHERE state = 'queued'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n as u64)
+    }
+
     /// Most recent sessions, newest first (dashboard, FR-9.1).
     pub fn recent_sessions(&self, limit: usize) -> Result<Vec<crate::types::Session>, CoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, provider_id, model, state, tokens_in, tokens_out, cost, started, transcript_path
+            "SELECT id, task_id, provider_id, model, role, state, tokens_in, tokens_out, cost, started, transcript_path
              FROM sessions ORDER BY started DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map([limit as i64], |row| {
-            let state_s: String = row.get(4)?;
-            let started_s: String = row.get(8)?;
+            let state_s: String = row.get(5)?;
+            let started_s: String = row.get(9)?;
             Ok(crate::types::Session {
                 id: row.get(0)?,
                 task_id: row.get(1)?,
                 provider_id: row.get(2)?,
                 model: row.get(3)?,
+                role: row.get(4)?,
                 state: match state_s.as_str() {
                     "starting" => crate::types::SessionState::Starting,
                     "running" => crate::types::SessionState::Running,
                     "paused" => crate::types::SessionState::Paused,
                     "migrating" => crate::types::SessionState::Migrating,
                     "done" => crate::types::SessionState::Done,
+                    "interrupted" => crate::types::SessionState::Interrupted,
                     _ => crate::types::SessionState::Failed,
                 },
-                tokens_in: row.get::<_, i64>(5)? as u64,
-                tokens_out: row.get::<_, i64>(6)? as u64,
-                cost: row.get(7)?,
+                tokens_in: row.get::<_, i64>(6)? as u64,
+                tokens_out: row.get::<_, i64>(7)? as u64,
+                cost: row.get(8)?,
                 started: chrono::DateTime::parse_from_rfc3339(&started_s)
                     .map(|d| d.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
-                transcript_path: row.get::<_, Option<String>>(9)?.map(Into::into),
+                transcript_path: row.get::<_, Option<String>>(10)?.map(Into::into),
             })
         })?;
         let mut out = Vec::new();
@@ -216,6 +237,85 @@ impl Ledger {
     }
 
     // ------------------------------------------------------- write tickets
+
+    /// All ledger entries oldest-first (FR-4.6 export).
+    pub fn all_entries(&self) -> Result<Vec<LedgerEntry>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, provider_id, tokens_in, tokens_cached, tokens_cache_write_5m,
+                    tokens_cache_write_1h, tokens_out, cost, latency_ms, ts
+             FROM ledger_entries ORDER BY ts",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let ts_s: String = row.get(10)?;
+            Ok(LedgerEntry {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                provider_id: row.get(2)?,
+                usage: crate::pricing::Tokens {
+                    input: row.get::<_, i64>(3)? as u64,
+                    cache_read: row.get::<_, i64>(4)? as u64,
+                    cache_write_5m: row.get::<_, i64>(5)? as u64,
+                    cache_write_1h: row.get::<_, i64>(6)? as u64,
+                    output: row.get::<_, i64>(7)? as u64,
+                },
+                cost: row.get(8)?,
+                latency_ms: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                ts: chrono::DateTime::parse_from_rfc3339(&ts_s)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// All sessions newest-first (export / `rolen sessions`).
+    pub fn all_sessions(&self) -> Result<Vec<crate::types::Session>, CoreError> {
+        self.recent_sessions(i64::MAX as usize)
+    }
+
+    /// All journaled write tickets oldest-first (FR-4.6/FR-7.7 export).
+    pub fn all_tickets(&self) -> Result<Vec<crate::types::WriteTicket>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, path, op, payload, base_hash, state, ts
+             FROM write_tickets ORDER BY ts",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let op_s: String = row.get(3)?;
+            let state_s: String = row.get(6)?;
+            let ts_s: String = row.get(7)?;
+            Ok(crate::types::WriteTicket {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                path: PathBuf::from(row.get::<_, String>(2)?),
+                op: match op_s.as_str() {
+                    "create" => crate::types::WriteOp::Create,
+                    "patch" => crate::types::WriteOp::Patch,
+                    "delete" => crate::types::WriteOp::Delete,
+                    "rename" => crate::types::WriteOp::Rename,
+                    _ => crate::types::WriteOp::Replace,
+                },
+                payload: row.get(4)?,
+                base_hash: row.get(5)?,
+                state: match state_s.as_str() {
+                    "applied" => crate::types::TicketState::Applied,
+                    "rejected" => crate::types::TicketState::Rejected,
+                    _ => crate::types::TicketState::Queued,
+                },
+                ts: chrono::DateTime::parse_from_rfc3339(&ts_s)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 
     pub fn insert_ticket(&self, t: &crate::types::WriteTicket) -> Result<(), CoreError> {
         self.conn.execute(

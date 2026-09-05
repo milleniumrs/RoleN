@@ -167,6 +167,19 @@ pub struct Provider {
     pub key_ref: Option<String>,
     #[serde(default)]
     pub models: Vec<Model>,
+    /// Taken out of routing rotation (FR-4.5 switch-rule alert action, or
+    /// `rolen provider suspend`). Suspended providers evaluate as unhealthy,
+    /// so fallback chains skip them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub suspended: bool,
+    /// FR-4.1: optional billing/quota endpoint polled by
+    /// `rolen provider sync-quota` (GET, bearer auth with the stored key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_url: Option<String>,
+    /// Dotted JSON path to the usage figure (e.g. "quota.used"); the value is
+    /// a number or an object with `used`/`limit` keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_json_path: Option<String>,
 }
 
 // ----------------------------------------------------------- subscriptions
@@ -305,6 +318,8 @@ pub enum SessionState {
     Migrating,
     Done,
     Failed,
+    /// Cancelled mid-run; a context snapshot exists for resume (FR-8.4, NFR-3).
+    Interrupted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +328,9 @@ pub struct Session {
     pub task_id: Option<String>,
     pub provider_id: String,
     pub model: String,
+    /// Role the session ran as (FR-9.1); "" for sessions that predate the column.
+    #[serde(default)]
+    pub role: String,
     pub state: SessionState,
     #[serde(default)]
     pub tokens_in: u64,
@@ -395,6 +413,9 @@ pub enum ClarificationStatus {
 pub struct Clarification {
     pub id: String,
     pub project_id: String,
+    /// Task that raised the question (FR-6.3/FR-6.5); None for interview batches.
+    #[serde(default)]
+    pub task_id: Option<String>,
     pub question: String,
     #[serde(default)]
     pub options: Vec<String>,

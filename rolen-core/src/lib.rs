@@ -8,6 +8,8 @@ pub mod config;
 pub mod doctor;
 pub mod error;
 pub mod ledger;
+pub mod notify;
+pub mod patch;
 pub mod pricing;
 pub mod project;
 pub mod rules;
