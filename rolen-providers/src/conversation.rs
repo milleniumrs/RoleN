@@ -74,6 +74,7 @@ pub fn send(
             task_id: None,
             provider_id: provider_id.to_string(),
             model: model.to_string(),
+            role: "quick-chat".into(),
             state: SessionState::Done,
             tokens_in: prior.tokens_in + response.usage.input,
             tokens_out: prior.tokens_out + response.usage.output,

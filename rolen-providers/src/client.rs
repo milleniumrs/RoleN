@@ -53,6 +53,53 @@ fn resolve_anthropic_auth(provider: &Provider) -> Result<Option<anthropic::Auth>
     }
 }
 
+/// FR-4.1: poll a provider's billing/quota endpoint. Requires the provider to
+/// carry `quota_url`; `quota_json_path` navigates the JSON (default: root).
+/// The target value is a number (used tokens) or an object with
+/// `used`/`limit` keys. Returns `(used, limit)`.
+pub fn fetch_quota(provider: &Provider) -> Result<(u64, Option<u64>), ProviderError> {
+    let url = provider.quota_url.clone().ok_or_else(|| {
+        ProviderError::NotFound(format!(
+            "provider '{}' has no quota_url configured (set it in providers.toml)",
+            provider.id
+        ))
+    })?;
+    let http = http_client()?;
+    let mut req = http.get(&url);
+    if let Some(key) = resolve_key(provider)? {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send()?;
+    if !resp.status().is_success() {
+        return Err(ProviderError::NotFound(format!(
+            "quota endpoint {} answered HTTP {}",
+            url,
+            resp.status()
+        )));
+    }
+    let body: serde_json::Value = resp.json()?;
+    let mut node = &body;
+    if let Some(path) = &provider.quota_json_path {
+        for step in path.split('.') {
+            node = node
+                .get(step)
+                .ok_or_else(|| ProviderError::NotFound(format!("path '{path}' not found")))?;
+        }
+    }
+    if let Some(n) = node.as_u64() {
+        return Ok((n, None));
+    }
+    let used = node["used"].as_u64();
+    let limit = node["limit"].as_u64();
+    match (used, limit) {
+        (Some(u), l) => Ok((u, l)),
+        _ => Err(ProviderError::NotFound(
+            "quota endpoint JSON has no usable number/used/limit at the configured path".into(),
+        )),
+    }
+}
+
+/// Provider base URL: explicit endpoint, SSH tunnel loopback, or type default.
 fn endpoint_of(provider: &Provider) -> Result<String, ProviderError> {
     if let Some(ep) = &provider.endpoint {
         return Ok(ep.clone());

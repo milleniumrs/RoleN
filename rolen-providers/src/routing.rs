@@ -30,12 +30,55 @@ pub fn remaining_pct(provider_id: &str) -> Option<u8> {
             .unwrap_or(now)
     });
     let ledger = Ledger::open_default().ok()?;
-    let used = ledger
-        .usage_since(Some(provider_id), &since.to_rfc3339())
-        .ok()?;
-    let used_total = used.total_tokens();
+    // FR-4.1/4.2: numbers synced from a billing endpoint or parsed CLI
+    // output are authoritative; ledger estimates are the fallback
+    let used_total = if matches!(
+        sub.source,
+        rolen_core::types::QuotaSource::Api | rolen_core::types::QuotaSource::Parsed
+    ) && sub.used > 0
+    {
+        sub.used
+    } else {
+        ledger
+            .usage_since(Some(provider_id), &since.to_rfc3339())
+            .ok()?
+            .total_tokens()
+    };
     let remaining = limit.saturating_sub(used_total);
     Some(((remaining * 100) / limit).min(100) as u8)
+}
+
+/// Burn rate and exhaustion forecast (FR-9.2): `(tokens_per_day, days_left)`
+/// for providers with a plan limit; None when no limit is set or nothing has
+/// been used yet this cycle.
+pub fn burn_rate(provider_id: &str) -> Option<(u64, f64)> {
+    let subs = quota::load().ok()?;
+    let sub = subs.iter().find(|s| s.provider_id == provider_id)?;
+    let limit = sub.plan_limit?;
+    let since = sub.cycle_start.unwrap_or_else(|| {
+        let now = chrono::Utc::now();
+        now.date_naive()
+            .with_day(1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc))
+            .unwrap_or(now)
+    });
+    let ledger = Ledger::open_default().ok()?;
+    let used = ledger
+        .usage_since(Some(provider_id), &since.to_rfc3339())
+        .ok()?
+        .total_tokens();
+    if used == 0 {
+        return None;
+    }
+    let days_elapsed = (chrono::Utc::now() - since).num_seconds().max(0) as f64 / 86400.0;
+    let per_day = (used as f64 / days_elapsed.max(0.04)) as u64; // min ~1h window
+    if per_day == 0 {
+        return None;
+    }
+    let days_left = limit.saturating_sub(used) as f64 / per_day as f64;
+    Some((per_day, days_left))
 }
 
 /// Collect the full evaluation context: every registered provider with
@@ -89,7 +132,10 @@ pub fn collect_cancellable(
             return Ok(None);
         }
         on_provider(done, total, &p.id);
-        let (healthy, models) = if p.ptype == ProviderType::Cli {
+        let (healthy, models) = if p.suspended {
+            // FR-4.5: suspended providers are skipped by rule routing
+            (false, p.models.iter().map(|m| m.id.clone()).collect())
+        } else if p.ptype == ProviderType::Cli {
             (false, Vec::new())
         } else {
             let h = client::health(p);

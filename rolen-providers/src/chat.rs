@@ -82,14 +82,14 @@ pub struct ToolSpec {
     pub parameters: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub args: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutcome {
     pub id: String,
     /// Tool name (required by Ollama tool messages; ignored elsewhere).
@@ -99,7 +99,7 @@ pub struct ToolOutcome {
 }
 
 /// Provider-agnostic conversation history entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistMsg {
     System(String),
     User(String),
