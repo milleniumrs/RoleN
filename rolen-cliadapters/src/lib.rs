@@ -9,6 +9,7 @@
 pub mod error;
 pub mod overlay;
 pub mod pty;
+pub mod quota;
 pub mod session;
 pub mod spec;
 
