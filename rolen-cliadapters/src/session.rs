@@ -53,6 +53,7 @@ pub fn run_cli_session(
         task_id: None,
         provider_id: provider.id.clone(),
         model: "cli".into(),
+        role: "cli-agent".into(),
         state: SessionState::Running,
         tokens_in: 0,
         tokens_out: 0,
