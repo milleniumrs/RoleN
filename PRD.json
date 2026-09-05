@@ -1,0 +1,311 @@
+{
+  "meta": {
+    "project": "RoleN",
+    "crate": "rolen",
+    "version": "0.2.0-synced",
+    "code_version": "0.3.0",
+    "date": "2026-09-02",
+    "original_date": "2026-08-16",
+    "status": "synced-with-code",
+    "language": "rust",
+    "ui_framework": "AppCUI-rs",
+    "ui_framework_version": "=0.4.17",
+    "type": ["tui", "headless-cli"],
+    "architecture": "router + built-in agent runtime",
+    "source_document": "PRD.md",
+    "status_legend": { "done": "implemented", "partial": "partially implemented", "missing": "not implemented" }
+  },
+  "vision": "A conductor for LLM-powered development: register all LLM subscriptions/CLIs once, assign providers to roles via quota-aware rules, be interrogated into an unambiguous PRD/AGENTS.md/skills per project, run projects and tasks in parallel under a single-writer orchestrator, and monitor sessions, tokens and quotas in an AppCUI TUI or via headless CLI.",
+  "goals": [
+    { "id": "G1", "status": "done", "text": "First-class support for API providers, CLI-subprocess providers, and Ollama (local + cloud + remote via SSH)" },
+    { "id": "G2", "status": "done", "text": "Declarative role-to-provider routing rules with quota-aware fallbacks" },
+    { "id": "G3", "status": "partial", "text": "Hybrid quota tracking: API usage parsing, billing endpoints, CLI output parsing, manual budgets, local estimation; unified dashboard. Estimation + manual budgets done; billing endpoints and CLI output parsing missing." },
+    { "id": "G4", "status": "partial", "text": "PRD/AGENTS.md/skill generation at the core, driven by an exhaustive clarification engine. Pre-project interview done; mid-project ambiguity detection missing." },
+    { "id": "G5", "status": "partial", "text": "Parallel projects and parallel tasks; single-writer orchestrator with write queue as the only file mutator. Parallel tasks + single writer done; multi-project in one process nominal." },
+    { "id": "G6", "status": "done", "text": "TUI-first (AppCUI) with fully scriptable headless CLI" },
+    { "id": "G7", "status": "done", "text": "Secrets in OS keychain with encrypted-file fallback" }
+  ],
+  "non_goals": [
+    { "id": "NG1", "text": "Not a model provider: no inference, no fine-tuning" },
+    { "id": "NG2", "text": "No cloud sync / multi-user / team features in v1" },
+    { "id": "NG3", "text": "No GUI front-end; TUI + CLI only (experimental egui/Dear ImGui GUI existed and was retired in commit 8c51951)" },
+    { "id": "NG4", "text": "No automatic merging of semantic conflicts" },
+    { "id": "NG5", "text": "No mobile/remote access" }
+  ],
+  "terminology": {
+    "provider": "Registered source of LLM capability: api | cli | ollama-local | ollama-cloud | ollama-remote (SSH tunnel, D8)",
+    "model": "Concrete model exposed by a provider",
+    "role": "Named workflow function (planner, summarizer, coder, tool-runner, image-reader, image-writer, doc-reader, doc-writer, reviewer, interrogator, custom)",
+    "rule": "role + condition -> ordered provider fallback chain",
+    "subscription": "Provider account with credentials, plan limits, renewal date, tracked consumption",
+    "project": "Unit of work stored as directory ~/rolen-workspaces/<id>/ with rolen-project.yaml; id is a lowercase slug of the name; DAG lives in tasks.yaml",
+    "task": "DAG node; assigned a role; executed by one agent session",
+    "session": "One running agent loop bound to a task, streaming events and token usage",
+    "orchestrator": "Scheduler + sole owner of the write queue; only component allowed to mutate project files",
+    "write_ticket": "Atomic file-mutation request {task_id, path, op, content|diff, base_hash} (priority field dropped in implementation)",
+    "interrogator": "Clarification engine role generating questions from PRD gaps/ambiguities",
+    "skill": "Reusable capability package suggested or installed for a project"
+  },
+  "personas": [
+    {
+      "name": "Solo power developer",
+      "description": "Owns 3-8 LLM subscriptions, codes daily, wants maximum throughput per dollar, works on several repos at once",
+      "use_cases": [
+        { "id": "UC1", "status": "done", "text": "Register a new provider in under 2 minutes via guided wizard; 'rolen provider detect --register' auto-discovers Ollama and CLI agents" },
+        { "id": "UC2", "status": "done", "text": "Write quota-aware routing rules via TUI rule editor or YAML" },
+        { "id": "UC3", "status": "done", "text": "Start a project: 'rolen project new' -> 'project interview' -> 'project build' produces PRD.md -> PRD.json -> AGENTS.md -> skills -> task DAG" },
+        { "id": "UC4", "status": "partial", "text": "Parallel tasks within one spec work ('rolen batch'); one process runs one spec at a time; alerts notify-only; no quota forecast yet" },
+        { "id": "UC5", "status": "partial", "text": "Headless CI runs exist ('rolen run --role R --task ... --json', 'rolen batch --spec tasks.yaml --watch') with safe exit codes; planned '--project P --task T --headless' semantics missing" },
+        { "id": "UC6", "status": "done", "text": "Automatic fallback with context hand-off when a provider hits its limit (mid-session migration)" }
+      ]
+    }
+  ],
+  "functional_requirements": [
+    {
+      "group": "FR-1 Provider Management",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-1.1", "status": "done", "text": "Register/edit/remove providers of types api, cli, ollama-local, ollama-cloud, plus ollama-remote (SSH tunnel)", "priority": "P0" },
+        { "id": "FR-1.2", "status": "partial", "text": "Provider wizard: endpoint/CLI-path detection, auth test, model discovery; capability probing only fills context_tokens/streaming for Ollama; vision/tools never probed for API providers", "priority": "P0" },
+        { "id": "FR-1.3", "status": "partial", "text": "Health checks on demand only; no timer-based probes, no latency history", "priority": "P0" },
+        { "id": "FR-1.4", "status": "done", "text": "Persisted model capability matrix with editable overrides", "priority": "P0" },
+        { "id": "FR-1.5", "status": "done", "text": "Cost table per model, beyond spec: cache-read/write rates, billing kinds (Free/PerToken/Subscription), manual model entry (pricing.toml, Model Prices window)", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-2 Credentials & Secrets",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-2.1", "status": "done", "text": "Store secrets in OS keychain via keyring crate; config holds key references only", "priority": "P0" },
+        { "id": "FR-2.2", "status": "done", "text": "age-encrypted fallback vault (vault.age) with master password via ROLEN_VAULT_PASSWORD", "priority": "P0" },
+        { "id": "FR-2.3", "status": "done", "text": "Env-var injection for headless/CI: ROLEN_KEY_<KEY_REF> (sanitized key ref); ROLEN_SECRETS_BACKEND forces a backend", "priority": "P0" },
+        { "id": "FR-2.4", "status": "partial", "text": "Secrets absent from config/logs by construction; no active redaction layer - wrapped-CLI PTY transcripts written verbatim", "priority": "P0" }
+      ]
+    },
+    {
+      "group": "FR-3 Roles & Routing Rules",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-3.1", "status": "done", "text": "Built-in role catalog plus user-defined roles", "priority": "P0" },
+        { "id": "FR-3.2", "status": "done", "text": "Rule DSL (YAML canonical rules.yaml + TUI editor): conditions on quota_remaining_%, cost_so_far, task_type, project, time_of_day, provider_health; ordered fallback chain", "priority": "P0" },
+        { "id": "FR-3.3", "status": "done", "text": "Rule evaluation at dispatch and mid-session on quota-exceeded events (session migration with Migrated event)", "priority": "P0" },
+        { "id": "FR-3.4", "status": "done", "text": "Dry-run/explain: 'rolen rule dry-run --role X' + TUI editor dry-run panel", "priority": "P0" },
+        { "id": "FR-3.5", "status": "partial", "text": "Rule-level project_scope works; Project.rules_override never read; P2 learned cost/latency heuristics absent", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-4 Quota & Token Tracking",
+      "priority": "P0",
+      "status": "partial",
+      "items": [
+        { "id": "FR-4.1", "status": "partial", "text": "API providers: usage parsing from responses incl. cache buckets; billing-endpoint polling data-driven via quota_url + quota_json_path in providers.toml, on demand with 'rolen provider sync-quota' (no automatic timer)", "priority": "P0" },
+        { "id": "FR-4.2", "status": "done", "text": "CLI providers: chars/4 estimation + manual budget; CLI quota-output parsing via adapter quota_args/quota_regex in cli-adapters.toml, run by 'rolen provider sync-quota'", "priority": "P0" },
+        { "id": "FR-4.3", "status": "done", "text": "Ollama local: unlimited-but-metered counting", "priority": "P0" },
+        { "id": "FR-4.4", "status": "done", "text": "Subscription profiles: plan limit, cycle start + renewal dates ('rolen provider budget --cycle-start/--renewal'), projected exhaustion via burn rate; synced numbers (Api/Parsed) override ledger estimates", "priority": "P0" },
+        { "id": "FR-4.5", "status": "done", "text": "Threshold alerts (default 80%/95%) with all actions: notify (TUI popup), switch-rule (provider auto-suspended, fallbacks engage; 'rolen provider suspend/resume'), pause-role (roles paused until 'rolen rule resume --role X')", "priority": "P0" },
+        { "id": "FR-4.6", "status": "done", "text": "SQLite ledger of every request (tokens incl. cache buckets, cost, latency, task, session) plus CSV/JSON export via 'rolen export --what ledger|sessions|tickets --format csv|json'", "priority": "P0" }
+      ]
+    },
+    {
+      "group": "FR-5 Project Core: PRD, AGENTS.md, Skills",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-5.1", "status": "done", "text": "Project scaffolding wizard: name, workspace dir, git init, stack", "priority": "P0" },
+        { "id": "FR-5.2", "status": "done", "text": "PRD builder: draft PRD.md from interview, schema-versioned PRD.json with 'rolen prd --validate'; TUI Build shows a review preview (full content first build, unified diff on rebuild) with Apply/Discard", "priority": "P0" },
+        { "id": "FR-5.3", "status": "done", "text": "AGENTS.md generator from PRD.json + stack + skills; regeneration is diff-previewed (patch::simple_diff) and needs Apply; still manual Build-triggered, no automatic change detection", "priority": "P0" },
+        { "id": "FR-5.4", "status": "done", "text": "Skill suggestions from local registry (built-in + user dirs), one-click install", "priority": "P0" },
+        { "id": "FR-5.5", "status": "done", "text": "PRD sections to initial task DAG proposal (tasks.yaml via daggen)", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-6 Clarification Engine (Interrogator)",
+      "priority": "P0",
+      "status": "partial",
+      "items": [
+        { "id": "FR-6.1", "status": "done", "text": "Pre-planning question batches covering scope edges, data models, error handling, auth, performance, platforms, i18n, accessibility, testing, deployment, licensing, definition-of-done", "priority": "P0" },
+        { "id": "FR-6.2", "status": "done", "text": "Answers recorded into PRD.json clarifications[] with timestamps; TUI forms with real controls (radio buttons for options, text field otherwise, explicit defer) in both interview and Questions tab; no datepicker questions yet", "priority": "P0" },
+        { "id": "FR-6.3", "status": "done", "text": "ask_user records a pending question (with task_id) into rolen-project.yaml - visible in the TUI Questions tab; the scheduler pauses tasks whose transitive dependencies have unanswered questions; the asking task proceeds with a documented assumption", "priority": "P0" },
+        { "id": "FR-6.4", "status": "done", "text": "Question modes: thorough (14 topics, default) / balanced (8) / minimal (4)", "priority": "P0" },
+        { "id": "FR-6.5", "status": "partial", "text": "Question <-> answer traceable via PRD.json; linked_prd_path always null, no question <-> task linkage", "priority": "P0" }
+      ]
+    },
+    {
+      "group": "FR-7 Orchestrator & Single-Writer File System",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-7.1", "status": "done", "text": "Orchestrator is the only component that writes project files; agents emit write tickets", "priority": "P0" },
+        { "id": "FR-7.2", "status": "done", "text": "Write ticket schema: task_id, path, op(create|patch|replace|delete|rename), content|diff, base_hash (priority field dropped)", "priority": "P0" },
+        { "id": "FR-7.3", "status": "done", "text": "Global write queue with per-path FIFO serialization; disjoint paths apply concurrently", "priority": "P0" },
+        { "id": "FR-7.4", "status": "partial", "text": "Optimistic concurrency via base_hash (stale rejected, agent re-reads/re-issues); orchestrator-mediated read-your-writes missing - reads go straight to disk", "priority": "P0" },
+        { "id": "FR-7.5", "status": "done", "text": "Planner/scheduler assigns path ownership; overlapping claims block; honesty check fails tasks whose claimed files were never written", "priority": "P0" },
+        { "id": "FR-7.6", "status": "done", "text": "Atomic writes via temp-file + rename", "priority": "P0" },
+        { "id": "FR-7.7", "status": "done", "text": "Ticket journaling in SQLite; git auto-commit checkpoints per completed task", "priority": "P0" },
+        { "id": "FR-7.8", "status": "partial", "text": "Backpressure done: parallelism.queue_cap (default 1000) blocks submitters when full; live queue depth in the TUI appbar from the cross-process ticket journal. Remaining: per-project fairness quotas (needs multi-project runs)", "priority": "P0" },
+        { "id": "FR-7.9", "status": "done", "text": "Unified-diff patch tickets applied with fuzzy 3-way context matching (declared position, then unique-match search); ambiguous/failed hunks reject the whole ticket", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-8 Parallel Execution",
+      "priority": "P0",
+      "status": "partial",
+      "items": [
+        { "id": "FR-8.1", "status": "partial", "text": "Parallel DAG execution with configurable caps (CPU heuristic + per-provider limits); N projects concurrently in one process missing - one spec per batch run", "priority": "P0" },
+        { "id": "FR-8.2", "status": "partial", "text": "Workspace isolation via separate directories under ~/rolen-workspaces; P1 git-worktree mode missing", "priority": "P0/P1" },
+        { "id": "FR-8.3", "status": "done", "text": "Session-per-task streaming events to the orchestrator bus", "priority": "P0" },
+        { "id": "FR-8.4", "status": "partial", "text": "Cancel via Ctrl+C on run/batch (graceful, between steps); cancelled sessions marked interrupted with context snapshot, resumable via 'rolen run --resume'; cooperative pause flag pauses agents (session marked paused, snapshot written). Remaining: TUI pause buttons, wrapped-CLI checkpointing (P1)", "priority": "P0/P1" },
+        { "id": "FR-8.5", "status": "done", "text": "Dependency-aware scheduling: task unblocks only when predecessors completed and their tickets applied", "priority": "P0" }
+      ]
+    },
+    {
+      "group": "FR-9 Sessions & Monitoring",
+      "priority": "P0",
+      "status": "partial",
+      "items": [
+        { "id": "FR-9.1", "status": "done", "text": "Dashboard per session: role (schema-migrated column), provider/model, state, tokens, cost, rate (tokens/min), elapsed; no last-event column (transcript covers it)", "priority": "P0" },
+        { "id": "FR-9.2", "status": "done", "text": "Per-provider panels: quota %, today's tokens/cost, burn rate (tokens/day) and exhaustion forecast for budgeted providers (gauges remain text - cosmetic)", "priority": "P0" },
+        { "id": "FR-9.3", "status": "partial", "text": "Transcripts now written for every built-in-runtime session (transcripts/<session>.md) and viewable in the TUI; quick-chat sessions still transcript-less; viewer read-only without search/export", "priority": "P0" },
+        { "id": "FR-9.4", "status": "partial", "text": "TUI popup notifications; OS toast on critical quota alerts (opt-in general.os_notifications + Settings checkbox; PowerShell balloon/osascript/notify-send). Remaining: toasts for pending questions and task failures", "priority": "P0" },
+        { "id": "FR-9.5", "status": "missing", "text": "Historical analytics not implemented", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-10 TUI (AppCUI)",
+      "priority": "P0",
+      "status": "partial",
+      "note": "Implemented as six tabs: Dashboard, Projects, Providers, Rules, Questions, Activity",
+      "items": [
+        { "id": "FR-10.1", "status": "partial", "text": "Dashboard: sessions listview + provider quota (text %); no progress-bar gauges, static queue-depth label, no alerts ticker", "priority": "P0" },
+        { "id": "FR-10.2", "status": "partial", "text": "Providers screen: table, wizard dialogs, capability matrix; no health graph view", "priority": "P0" },
+        { "id": "FR-10.3", "status": "done", "text": "Rules editor: condition builder, fallback-chain editor with up/down ordering, dry-run panel", "priority": "P0" },
+        { "id": "FR-10.4", "status": "done", "text": "Projects screen: treeview (project -> tasks from tasks.yaml -> their sessions) with pending-question/PRD/AGENTS marks; Enter opens the project detail window (PRD.md/AGENTS.md/skills/clarifications tabs) or a session transcript", "priority": "P0" },
+        { "id": "FR-10.5", "status": "partial", "text": "Chat/Session view: Quick Chat window (multi-turn, ledgered) but cannot steer a running agent session; Activity tab shows live PTY output read-only; no ticket/ledger side panel", "priority": "P0" },
+        { "id": "FR-10.6", "status": "done", "text": "Interrogation center: Questions tab lists pending question batches across all projects with answering", "priority": "P0" },
+        { "id": "FR-10.7", "status": "partial", "text": "Menus, mouse support, 13 named themes with live switching + persistence (beyond spec); keybindings hardcoded, not configurable", "priority": "P0" },
+        { "id": "FR-10.8", "status": "missing", "text": "No split layouts; in-TUI project/batch run is a stub", "priority": "P2" }
+      ]
+    },
+    {
+      "group": "FR-11 Headless CLI",
+      "priority": "P0",
+      "status": "partial",
+      "note": "Binary 'rolen'; actual subcommands: tui, config, provider, quota, rule, run, batch, project, prd, cli",
+      "items": [
+        { "id": "FR-11.1", "status": "partial", "text": "Implemented: provider (add/remove/models/test/detect/health/budget/suspend/resume), rule (init/list/add/remove/dry-run/pause/resume), project (new/list/interview/build/skills), prd, quota, run (incl. --resume), batch, cli, config (incl. export/import), sessions, export, tui. Missing vs plan: top-level agents, skills", "priority": "P0" },
+        { "id": "FR-11.2", "status": "done", "text": "'rolen run --role R --task <desc> [--json --resume ...]'; 'rolen run --project P [--task T]' runs a task id from the project's tasks.yaml or the whole DAG when omitted; --headless accepted for CI parity; exit codes 0/1/130", "priority": "P0" },
+        { "id": "FR-11.3", "status": "done", "text": "TUI and CLI mutate the same single core library", "priority": "P0" },
+        { "id": "FR-11.4", "status": "done", "text": "NDJSON event stream implemented as 'rolen batch --watch'", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-12 Built-in Agent Runtime",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-12.1", "status": "done", "text": "Agent loop: chat with tool calls until done (retry, tool-call salvaging, completion nudges)", "priority": "P0" },
+        { "id": "FR-12.2", "status": "done", "text": "Standard tools: read_file, search, list_dir, run_shell (sandboxed, allow-listed), submit_write (write ticket), ask_user (stub, see FR-6.3); no direct write_file tool", "priority": "P0" },
+        { "id": "FR-12.3", "status": "done", "text": "Context management: near the context limit the middle of the history is LLM-summarized into a structured hand-off note (goal/decisions/files/open questions/next steps), ledgered; drop-middle fallback when the model is unreachable", "priority": "P0" },
+        { "id": "FR-12.4", "status": "missing", "text": "No MCP client anywhere in the codebase", "priority": "P1" }
+      ]
+    },
+    {
+      "group": "FR-13 CLI-Provider Wrapping",
+      "priority": "P0",
+      "status": "done",
+      "items": [
+        { "id": "FR-13.1", "status": "partial", "text": "Spawn CLI agents as PTY subprocesses (portable-pty/ConPTY); output forwarded as raw chunks - no semantic stream-parsing", "priority": "P0" },
+        { "id": "FR-13.2", "status": "done", "text": "Overlay + harvest: staging-copy overlay; writes diffed, harvested and re-applied through the orchestrator write queue (single-writer guarantee holds for CLI providers)", "priority": "P0" },
+        { "id": "FR-13.3", "status": "done", "text": "Data-driven adapters: cli-adapters.toml [[adapter]] entries (match + args template) extend/override built-in templates with no recompile (NFR-6); remaining: per-CLI quota parsers", "priority": "P0" }
+      ]
+    },
+    {
+      "group": "FR-14 Configuration & Storage",
+      "priority": "P0",
+      "status": "partial",
+      "items": [
+        { "id": "FR-14.1", "status": "done", "text": "Human-editable config (config.toml, providers.toml, rules.yaml per D2, subscriptions.toml, pricing.toml) under ~/.config/rolen (XDG) / %APPDATA%\\rolen, plus skills/ library dir", "priority": "P0" },
+        { "id": "FR-14.2", "status": "done", "text": "SQLite state DB (ledger.sqlite3: ledger, sessions, ticket journal, PRD cache) with schema migrations", "priority": "P0" },
+        { "id": "FR-14.3", "status": "partial", "text": "'rolen config doctor' validates; SQLite schema versioned/migrated; config.toml itself has no schema-version field or migrations", "priority": "P0" },
+        { "id": "FR-14.4", "status": "done", "text": "'rolen config export [--out file]' writes a JSON bundle of config/providers/rules/subscriptions/pricing (secrets excluded); 'rolen config import --from file' restores with .bak backups", "priority": "P0" }
+      ]
+    }
+  ],
+  "non_functional_requirements": [
+    { "id": "NFR-1", "status": "done", "text": "Platforms: Windows 10+, macOS 13+, Linux; x64 + arm64 (CI builds all targets)" },
+    { "id": "NFR-2", "status": "unverified", "text": "Performance: <100ms input latency; >=20 concurrent sessions; >=200 write tickets/s (not benchmarked)" },
+    { "id": "NFR-3", "status": "done", "text": "Reliability: crash-safe journaling; restart reconciles tickets and marks sessions recoverable/interrupted" },
+    { "id": "NFR-4", "status": "done", "text": "Security: keychain/vault secrets, sandboxed shell tool with per-project allow-lists, no telemetry by default" },
+    { "id": "NFR-5", "status": "partial", "text": "Testability: UI-free rolen-core; >=70% coverage target on routing/write-queue/ledger not measured; golden-file tests for generators" },
+    { "id": "NFR-6", "status": "done", "text": "Extensibility: skills (SKILL.md registry) and CLI adapters (cli-adapters.toml) are data-driven, no recompile" },
+    { "id": "NFR-7", "status": "done", "text": "Localization-ready: externalized strings, full Unicode" }
+  ],
+  "architecture": {
+    "crates": ["rolen-core", "rolen-orchestrator", "rolen-providers", "rolen-runtime", "rolen-cliadapters", "rolen-tui", "rolen-cli"],
+    "core_components": ["rule engine", "orchestrator", "quota/ledger", "interrogator", "event bus + SQLite journal", "agent runtime", "CLI adapters (PTY)", "provider HTTP clients"],
+    "write_path": "agent/runtime/CLI-adapter -> write ticket -> orchestrator queue (per-path FIFO, disjoint-path concurrency) -> atomic temp+rename -> journal -> git checkpoint",
+    "dependency": "AppCUI from crates.io, pinned: appcui = \"=0.4.17\"",
+    "config_dir": "~/.config/rolen (XDG) / %APPDATA%\\rolen",
+    "workspaces_dir": "~/rolen-workspaces/<project-id-slug>"
+  },
+  "implemented_beyond_prd": [
+    "Quick Chat window (Ctrl+Q): multi-turn ledgered conversation with any provider",
+    "Settings window (F10): workspace root, theme, question mode, parallelism caps, alert thresholds",
+    "13 named colour themes with live switching and persistence; offscreen theme-verification tooling (docs/theme_report.py)",
+    "Model Prices window: cache-read/write rates, billing kinds (Free/PerToken/Subscription), manual model entry",
+    "Activity tab: live PTY output of a wrapped CLI task",
+    "Anthropic OAuth subscription import from opencode auth.json with auto-refresh (D9)",
+    "ollama-remote SSH tunnel manager (D8)",
+    "CLI extras: provider detect [--register], provider budget, provider test, rule init, rule dry-run, batch, cli run, config path",
+    "Agent-loop robustness: tool-call JSON salvaging, completion guard, scheduler honesty check"
+  ],
+  "data_model": {
+    "Provider": ["id", "type(api|cli|ollama-local|ollama-cloud|ollama-remote)", "endpoint|cli_path", "key_ref", "models[]", "suspended", "capabilities", "cost_table?"],
+    "Subscription": ["provider_id", "plan_limit", "used", "cycle_start (unused)", "renewal (unused)", "source(api|parsed|manual|estimated)"],
+    "Rule": ["id", "role", "conditions[]", "fallback_chain[]", "priority", "project_scope?"],
+    "Project": ["id (slug of name)", "name", "dir", "prd_json", "agents_md_hash", "skills[]", "tasks[]", "rules_override? (unused)"],
+    "Task": ["id", "project_id", "role", "title", "deps[]", "claimed_paths[]", "state", "session_id?"],
+    "Session": ["id", "task_id", "provider_id", "model", "state", "tokens_in", "tokens_out", "cost", "started", "transcript_path (wrapped-CLI sessions only)"],
+    "WriteTicket": ["id", "task_id", "path", "op", "payload", "base_hash", "state(queued|applied|rejected)", "ts"],
+    "LedgerEntry": ["id", "session_id", "provider_id", "tokens_in", "tokens_out", "cache_read", "cache_write_5m", "cache_write_1h", "cost", "latency_ms", "ts"],
+    "Clarification": ["id", "project_id", "task_id?", "question", "options?", "answer?", "status", "linked_prd_path (currently always null)", "ts"]
+  },
+  "milestones": [
+    { "id": "M0", "name": "Skeleton", "status": "done 2026-08-16", "contents": "workspace, core types, config, keychain, SQLite, AppCUI hello-window", "exit_criteria": "rolen config doctor passes; TUI opens" },
+    { "id": "M1", "name": "Providers + Ledger", "status": "done 2026-08-16", "contents": "FR-1, FR-2, FR-4 for API + Ollama", "exit_criteria": "register provider, send test prompt, see tokens in dashboard" },
+    { "id": "M2", "name": "Rules + Runtime", "status": "done 2026-08-16", "contents": "FR-3, FR-12", "exit_criteria": "role-to-provider routing with quota fallback works headless" },
+    { "id": "M3", "name": "Orchestrator", "status": "done 2026-08-16", "contents": "FR-7, FR-8", "exit_criteria": "2 parallel agents, 100% of writes via queue, hash-reject test passes" },
+    { "id": "M4", "name": "Project core", "status": "done 2026-08-16", "contents": "FR-5, FR-6", "exit_criteria": "new project -> interview -> PRD.md/PRD.json/AGENTS.md/skills" },
+    { "id": "M5", "name": "CLI adapters", "status": "done 2026-08-16 (mock + live claude CLI)", "contents": "FR-13", "exit_criteria": "wrap claude/codex session in dashboard" },
+    { "id": "M6", "name": "TUI complete", "status": "done 2026-08-16", "contents": "FR-9, FR-10", "exit_criteria": "all screens, alerts, transcripts" },
+    { "id": "M7", "name": "Headless polish", "status": "done 2026-08-16 (store packaging deferred to v1.0)", "contents": "FR-11, packaging", "exit_criteria": "CI pipeline example runs green" },
+    { "id": "0.2.0/0.3.0", "name": "Post-PRD releases", "status": "done 2026-08", "contents": "pricing model beyond FR-1.5, themes, Quick Chat, Settings; desktop GUI retired", "exit_criteria": "release binaries on all targets" },
+    { "id": "v1.0", "name": "Release", "status": "pending", "contents": "P1 items (worktrees, MCP, analytics) plus remaining gaps: FR-7.8 fairness, FR-8.4 TUI/CLI-adapter checkpointing, FR-14.4 export", "exit_criteria": "soak test: 3 projects x 4 tasks for 4h" }
+  ],
+  "risks": [
+    { "risk": "CLI tools change output formats, quota parsing breaks", "impact": "medium", "mitigation": "adapter version pinning, parser tests, manual-budget fallback" },
+    { "risk": "Single-writer queue becomes throughput bottleneck", "impact": "medium", "mitigation": "per-path concurrency, batching, benchmark at M3" },
+    { "risk": "Agents produce conflicting semantic changes", "impact": "high", "mitigation": "planner-level path ownership, reviewer role, git checkpoints" },
+    { "risk": "Provider APIs differ subtly (tool calling, streaming)", "impact": "medium", "mitigation": "capability matrix + per-provider conformance tests" },
+    { "risk": "User fatigue from too many questions", "impact": "medium", "mitigation": "question modes, batching, answer-later with task pausing" },
+    { "risk": "Context loss on mid-session provider switch", "impact": "medium", "mitigation": "summarization hand-off before migration" },
+    { "risk": "AppCUI upstream changes", "impact": "low", "mitigation": "pinned crates.io version =0.4.17" }
+  ],
+  "open_questions": [],
+  "resolved_decisions": [
+    { "id": "D1", "question": "License", "decision": "MIT (changed 2026-08-16 from dual MIT OR Apache-2.0)" },
+    { "id": "D2", "question": "Rule DSL format", "decision": "YAML canonical (rules.yaml); TUI edits round-trip to YAML" },
+    { "id": "D3", "question": "CLI agent file writes", "decision": "Overlay + harvest: writes re-applied via orchestrator queue (FR-13.2)" },
+    { "id": "D4", "question": "Skill format", "decision": "SKILL.md convention (YAML front-matter + resources/)" },
+    { "id": "D5", "question": "Session migration format", "decision": "Structured snapshot + summary (goal, decisions, task state, condensed conversation, file manifests)" },
+    { "id": "D6", "question": "Default parallelism cap", "decision": "CPU heuristic max(2, logical_cpus/2) + per-provider concurrency limits, user-tunable" },
+    { "id": "D7", "question": "Windows PTY", "decision": "portable-pty (ConPTY on Windows) for all CLI adapters" },
+    { "id": "D8", "question": "Remote Ollama", "decision": "ollama-remote provider type: managed ssh -N -L port-forward (system ssh, ~/.ssh keys, BatchMode); provider uses local forwarded port" },
+    { "id": "D9", "question": "Anthropic subscription auth", "decision": "OAuth access/refresh tokens imported from opencode auth.json, stored as JSON secret, auto-refreshed; anthropic-beta oauth-2025-04-20 header" },
+    { "id": "D10", "question": "Project identity", "decision": "Project id = lowercase slug of the name (also the workspace directory name); lookup accepts id or case-insensitive display name; no UUID registry (added 2026-09-02)" }
+  ],
+  "tui_design_doc": "docs/TUI-DESIGN.md"
+}
