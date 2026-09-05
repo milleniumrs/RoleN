@@ -22,6 +22,9 @@ pub struct ToolContext {
     pub sink: Box<dyn WriteSink>,
     /// Task id stamped onto tickets.
     pub task_id: String,
+    /// Project directory for ask_user question recording (FR-6.3); None when
+    /// the workspace does not belong to a project.
+    pub project_dir: Option<PathBuf>,
 }
 
 pub fn specs() -> Vec<ToolSpec> {
@@ -64,13 +67,13 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "submit_write".into(),
-            description: "The ONLY way to create/modify/delete files. Sends a write ticket to the orchestrator. Args: path, content, op (create|replace|delete).".into(),
+            description: "The ONLY way to create/modify/delete files. Sends a write ticket to the orchestrator. Args: path, op (create|replace|delete|patch), content (full content, or a unified diff for patch).".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "content": {"type": "string"},
-                    "op": {"type": "string", "enum": ["create", "replace", "delete"]}
+                    "op": {"type": "string", "enum": ["create", "replace", "delete", "patch"]}
                 },
                 "required": ["path", "op"]
             }),
@@ -156,6 +159,7 @@ fn run(ctx: &ToolContext, call: &ToolCall) -> Result<String, RuntimeError> {
             let op = match arg_str(&call.args, "op")?.as_str() {
                 "create" => WriteOp::Create,
                 "delete" => WriteOp::Delete,
+                "patch" => WriteOp::Patch,
                 _ => WriteOp::Replace,
             };
             let content = arg_str(&call.args, "content").unwrap_or_default();
@@ -182,7 +186,28 @@ fn run(ctx: &ToolContext, call: &ToolCall) -> Result<String, RuntimeError> {
         }
         "ask_user" => {
             let q = arg_str(&call.args, "question")?;
-            // Headless (M2): the interrogation queue UI arrives in M4.
+            // FR-6.3: record the question in the project's interrogation
+            // queue (visible in the TUI Questions tab; tasks that depend on
+            // this one pause until it is answered). The asking task itself
+            // is non-blocking: it proceeds with a documented assumption.
+            if let Some(dir) = &ctx.project_dir {
+                match rolen_core::project::record_question(dir, Some(&ctx.task_id), &q) {
+                    Ok(c) => {
+                        return Ok(format!(
+                            "Question recorded in the project interrogation queue as {} (pending). \
+                             Dependent tasks pause until it is answered. No interactive answer is \
+                             available in this run — proceed with a reasonable assumption and document it.",
+                            c.id
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(format!(
+                            "Question could not be recorded ({e}). Proceed with a reasonable \
+                             assumption and document it. Question was: \"{q}\""
+                        ));
+                    }
+                }
+            }
             Ok(format!(
                 "Question recorded for the user: \"{q}\". No interactive answer available in this run — proceed with a reasonable assumption and document it."
             ))

@@ -64,6 +64,8 @@ pub struct BatchOptions {
     pub max_parallel: usize,
     pub shell_allow: Vec<String>,
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Cooperative pause for all task sessions (FR-8.4).
+    pub pause: Option<Arc<AtomicBool>>,
 }
 
 pub enum BatchEvent {
@@ -118,7 +120,12 @@ pub fn run_batch(
     std::fs::create_dir_all(&opts.workdir)?;
     let git_ok = git::ensure_repo(&opts.workdir);
 
-    let queue = WriteQueue::new(opts.workdir.clone());
+    let queue = WriteQueue::with_capacity(
+        opts.workdir.clone(),
+        rolen_core::config::Config::load()
+            .map(|c| c.parallelism.queue_cap)
+            .unwrap_or(0),
+    );
     let max_parallel = if opts.max_parallel > 0 {
         opts.max_parallel
     } else {
@@ -143,8 +150,14 @@ pub fn run_batch(
     let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
     let mut done_reports: Vec<(String, RunReport)> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
-    // agent output lines travel through this channel so the event consumer
-    // decides how to present them (human text vs NDJSON stream)
+    // FR-6.3: tasks depending on a task with unanswered questions are paused
+    // until the user answers (interrogation center / TUI Questions tab).
+    let project_dir = rolen_core::project::find_project_dir_upwards(&opts.workdir);
+    let mut pending_questions: HashSet<String> = HashSet::new();
+    let mut question_wait_reported: HashSet<String> = HashSet::new();
+    let mut poll_countdown = 0u32; // re-read the project file ~once per second
+                                   // agent output lines travel through this channel so the event consumer
+                                   // decides how to present them (human text vs NDJSON stream)
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<(String, String)>();
 
     loop {
@@ -226,6 +239,13 @@ pub fn run_batch(
         }
 
         // find launchable tasks
+        if let Some(dir) = &project_dir {
+            if poll_countdown == 0 {
+                pending_questions = rolen_core::project::pending_question_task_ids(dir);
+                poll_countdown = 10;
+            }
+            poll_countdown -= 1;
+        }
         let running_count = status
             .values()
             .filter(|s| matches!(s, TaskStatus::Running))
@@ -253,6 +273,19 @@ pub fn run_batch(
                 if !deps.iter().all(|s| matches!(s, TaskStatus::Done)) {
                     continue;
                 }
+                // FR-6.3: pause while a dependency has an unanswered question
+                if blocked_by_question(spec, &task.id, &pending_questions) {
+                    if question_wait_reported.insert(task.id.clone()) {
+                        on_event(BatchEvent::Waiting {
+                            id: task.id.clone(),
+                            reason: "awaiting answer to a clarification question \
+                                     (see the TUI Questions tab)"
+                                .into(),
+                        });
+                    }
+                    continue;
+                }
+                question_wait_reported.remove(&task.id);
                 // path claims (FR-7.5)
                 if task.claimed_paths.iter().any(|p| claimed.contains_key(p)) {
                     on_event(BatchEvent::Waiting {
@@ -280,6 +313,7 @@ pub fn run_batch(
                 let results = results.clone();
                 let finished = finished.clone();
                 let cancel = cancel.clone();
+                let pause = opts.pause.clone();
                 let agent_tx = agent_tx.clone();
                 handles.push(std::thread::spawn(move || {
                     let prefix_id = task.id.clone();
@@ -296,6 +330,7 @@ pub fn run_batch(
                         expected_paths: task.claimed_paths.clone(),
                         sink: Some(Box::new(sink)),
                         cancel: Some(cancel),
+                        pause,
                         shell_allow,
                         ..Default::default()
                     };
@@ -314,9 +349,18 @@ pub fn run_batch(
                         AgentEvent::ToolDone { name, is_error, .. } => {
                             printer(format!("{} {name}", if is_error { "✗" } else { "✓" }))
                         }
-                        AgentEvent::Compacted { dropped } => {
-                            printer(format!("… compacted ({dropped})"))
+                        AgentEvent::Compacted {
+                            dropped,
+                            summarized,
+                        } => {
+                            if summarized {
+                                printer(format!("… compacted ({dropped} summarized)"))
+                            } else {
+                                printer(format!("… compacted ({dropped} dropped)"))
+                            }
                         }
+                        AgentEvent::Paused => printer("⏸ paused".into()),
+                        AgentEvent::Resumed => printer("▶ resumed".into()),
                         AgentEvent::Retrying { attempt, reason } => {
                             printer(format!("⟳ retry {attempt}: {reason}"))
                         }
@@ -355,6 +399,78 @@ pub fn run_batch(
     Ok(report)
 }
 
+/// FR-6.3: true when any transitive dependency of `id` has a pending
+/// clarification question (`pending` holds task ids with unanswered
+/// questions). The DAG is already validated, so recursion terminates.
+fn blocked_by_question(spec: &BatchSpec, id: &str, pending: &HashSet<String>) -> bool {
+    if pending.is_empty() {
+        return false;
+    }
+    fn walk(
+        spec: &BatchSpec,
+        id: &str,
+        pending: &HashSet<String>,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        let Some(task) = spec.tasks.iter().find(|t| t.id == id) else {
+            return false;
+        };
+        for dep in &task.deps {
+            if pending.contains(dep) {
+                return true;
+            }
+            if seen.insert(dep.clone()) && walk(spec, dep, pending, seen) {
+                return true;
+            }
+        }
+        false
+    }
+    walk(spec, id, pending, &mut HashSet::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec() -> BatchSpec {
+        let task = |id: &str, deps: &[&str]| TaskSpec {
+            id: id.into(),
+            role: "coder".into(),
+            title: id.into(),
+            task: "do it".into(),
+            deps: deps.iter().map(|s| s.to_string()).collect(),
+            claimed_paths: vec![],
+            provider: None,
+            model: None,
+        };
+        BatchSpec {
+            tasks: vec![
+                task("a", &[]),
+                task("b", &["a"]),
+                task("c", &["b"]),
+                task("d", &[]),
+            ],
+        }
+    }
+
+    #[test]
+    fn dag_validation_accepts_and_rejects() {
+        assert!(validate_dag(&spec()).is_ok());
+        let mut bad = spec();
+        bad.tasks[0].deps = vec!["c".into()]; // a -> c -> b -> a cycle
+        assert!(validate_dag(&bad).is_err());
+    }
+
+    #[test]
+    fn question_blocks_transitive_dependents_only() {
+        let pending: HashSet<String> = ["a".to_string()].into_iter().collect();
+        assert!(!blocked_by_question(&spec(), "a", &pending)); // the asker itself runs
+        assert!(blocked_by_question(&spec(), "b", &pending)); // direct dependent
+        assert!(blocked_by_question(&spec(), "c", &pending)); // transitive dependent
+        assert!(!blocked_by_question(&spec(), "d", &pending)); // unrelated task
+        assert!(!blocked_by_question(&spec(), "b", &HashSet::new()));
+    }
+}
 fn validate_dag(spec: &BatchSpec) -> Result<(), SchedError> {
     let ids: HashSet<&str> = spec.tasks.iter().map(|t| t.id.as_str()).collect();
     if ids.len() != spec.tasks.len() {
