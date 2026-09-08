@@ -27,6 +27,10 @@ pub struct ProjectMeta {
     pub clarifications: Vec<Clarification>,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// FR-3.5: project-local routing rules. These are evaluated ahead of the
+    /// global rules.yaml when agents run inside this project.
+    #[serde(default)]
+    pub rules_override: Vec<crate::types::Rule>,
 }
 
 impl ProjectMeta {
@@ -82,6 +86,7 @@ pub fn scaffold(
         created: Utc::now(),
         clarifications: Vec::new(),
         skills: Vec::new(),
+        rules_override: Vec::new(),
     };
     meta.save(&dir)?;
     // git init (FR-5.1); checkpoints are the orchestrator's job (FR-7.7)
@@ -135,6 +140,26 @@ pub fn find_project_dir_upwards(start: &Path) -> Option<PathBuf> {
 /// (several agent threads may record questions concurrently).
 static QUESTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// FR-6.5: map a clarification topic to the REQUIREMENTS.json section it informs.
+pub fn prd_path_for_topic(topic: Option<&str>) -> Option<String> {
+    let t = topic?.to_lowercase();
+    if t.contains("scope") || t.contains("feature") {
+        Some("features".into())
+    } else if t.contains("test")
+        || t.contains("done")
+        || t.contains("deploy")
+        || t.contains("licens")
+    {
+        Some("definition_of_done".into())
+    } else if t.contains("goal") || t.contains("overview") {
+        Some("overview".into())
+    } else {
+        // data model, error handling, auth, performance, platforms, i18n,
+        // accessibility and similar topics constrain the implementation.
+        Some("constraints".into())
+    }
+}
+
 /// FR-6.3: record a mid-project clarification raised by an agent (`ask_user`
 /// tool) as a pending question in the project's metadata, where the TUI
 /// interrogation center and the scheduler can see it.
@@ -142,6 +167,17 @@ pub fn record_question(
     dir: &Path,
     task_id: Option<&str>,
     question: &str,
+) -> Result<Clarification, CoreError> {
+    record_question_with_topic(dir, task_id, question, None)
+}
+
+/// FR-6.3/FR-6.5: record a mid-project question with an optional topic used
+/// to link it to the REQUIREMENTS.json section it informs.
+pub fn record_question_with_topic(
+    dir: &Path,
+    task_id: Option<&str>,
+    question: &str,
+    topic: Option<&str>,
 ) -> Result<Clarification, CoreError> {
     let _guard = QUESTION_LOCK
         .lock()
@@ -158,7 +194,7 @@ pub fn record_question(
         options: Vec::new(),
         answer: None,
         status: crate::types::ClarificationStatus::Pending,
-        linked_prd_path: None,
+        linked_prd_path: prd_path_for_topic(topic),
         ts: chrono::Utc::now(),
     };
     meta.clarifications.push(clarification.clone());
@@ -184,6 +220,38 @@ pub fn pending_question_task_ids(dir: &Path) -> std::collections::HashSet<String
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// FR-6.5: pending questions with their ids, so the scheduler/TUI can say
+/// exactly which clarification blocks a dependent task.
+pub fn pending_questions(dir: &Path) -> Vec<Clarification> {
+    ProjectMeta::load(dir)
+        .map(|m| {
+            m.clarifications
+                .into_iter()
+                .filter(|c| c.status == crate::types::ClarificationStatus::Pending)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// FR-6.5: keep an existing REQUIREMENTS.json's clarifications array in sync with
+/// rolen-project.yaml after answers land mid-project. Other REQUIREMENTS.json sections
+/// are preserved; a full Build still regenerates everything.
+pub fn refresh_prd_json_clarifications(dir: &Path) -> Result<(), CoreError> {
+    let path = dir.join("REQUIREMENTS.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    let meta = ProjectMeta::load(dir)?;
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)?)
+        .map_err(|e| CoreError::Vault(format!("REQUIREMENTS.json parse: {e}")))?;
+    v["clarifications"] = serde_json::to_value(&meta.clarifications)
+        .map_err(|e| CoreError::Vault(format!("clarifications serialize: {e}")))?;
+    let text = serde_json::to_string_pretty(&v)
+        .map_err(|e| CoreError::Vault(format!("REQUIREMENTS.json serialize: {e}")))?;
+    std::fs::write(&path, text)?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------- Requirements
@@ -579,6 +647,7 @@ mod tests {
             created: Utc::now(),
             clarifications: vec![],
             skills: vec![],
+            rules_override: vec![],
         }
     }
 
@@ -644,12 +713,22 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         meta().save(&dir).unwrap();
 
-        let c = record_question(&dir, Some("task-a"), "Which DB engine?").unwrap();
+        let c = record_question_with_topic(
+            &dir,
+            Some("task-a"),
+            "Which DB engine?",
+            Some("data-model"),
+        )
+        .unwrap();
         assert_eq!(c.status, crate::types::ClarificationStatus::Pending);
         assert_eq!(c.task_id.as_deref(), Some("task-a"));
+        assert_eq!(c.linked_prd_path.as_deref(), Some("constraints"));
 
         let pending = pending_question_task_ids(&dir);
         assert!(pending.contains("task-a"));
+        let detailed = pending_questions(&dir);
+        assert_eq!(detailed.len(), 1);
+        assert_eq!(detailed[0].id, c.id);
 
         // answering the question unblocks the dependent tasks
         let mut m = ProjectMeta::load(&dir).unwrap();
@@ -657,6 +736,23 @@ mod tests {
         m.save(&dir).unwrap();
         assert!(pending_question_task_ids(&dir).is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn topic_maps_to_a_prd_section() {
+        assert_eq!(
+            prd_path_for_topic(Some("data-model")).as_deref(),
+            Some("constraints")
+        );
+        assert_eq!(
+            prd_path_for_topic(Some("scope")).as_deref(),
+            Some("features")
+        );
+        assert_eq!(
+            prd_path_for_topic(Some("definition-of-done")).as_deref(),
+            Some("definition_of_done")
+        );
+        assert_eq!(prd_path_for_topic(None), None);
     }
 
     #[test]

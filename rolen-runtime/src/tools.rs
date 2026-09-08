@@ -83,7 +83,10 @@ pub fn specs() -> Vec<ToolSpec> {
             description: "Ask the human a clarifying question when requirements are ambiguous.".into(),
             parameters: json!({
                 "type": "object",
-                "properties": {"question": {"type": "string"}},
+                "properties": {
+                    "question": {"type": "string"},
+                    "topic": {"type": "string", "description": "optional Requirements topic, e.g. data-model, auth, testing"}
+                },
                 "required": ["question"]
             }),
         },
@@ -191,7 +194,13 @@ fn run(ctx: &ToolContext, call: &ToolCall) -> Result<String, RuntimeError> {
             // this one pause until it is answered). The asking task itself
             // is non-blocking: it proceeds with a documented assumption.
             if let Some(dir) = &ctx.project_dir {
-                match rolen_core::project::record_question(dir, Some(&ctx.task_id), &q) {
+                let topic = call.args["topic"].as_str();
+                match rolen_core::project::record_question_with_topic(
+                    dir,
+                    Some(&ctx.task_id),
+                    &q,
+                    topic,
+                ) {
                     Ok(c) => {
                         return Ok(format!(
                             "Question recorded in the project interrogation queue as {} (pending). \

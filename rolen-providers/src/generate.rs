@@ -17,6 +17,8 @@ use serde_json::Value;
 pub struct GenQuestion {
     pub question: String,
     pub options: Vec<String>,
+    /// FR-6.5: coarse topic used to link the question to a REQUIREMENTS.json section.
+    pub topic: Option<String>,
 }
 
 /// Route a role through the rule engine and return the provider + model.
@@ -110,7 +112,7 @@ pub fn generate_questions(
          scope edges, data model, error handling, auth/permissions, performance targets, target platforms, \
          i18n, accessibility, testing strategy, deployment, licensing, and definition-of-done.\n\
          Return ONLY a JSON array, no prose:\n\
-         [{{\"question\": \"...\", \"options\": [\"option A\", \"option B\"]}}, ...]\n\
+         [{{\"question\": \"...\", \"topic\": \"scope|data-model|error-handling|auth|performance|platforms|i18n|accessibility|testing|deployment|licensing|definition-of-done\", \"options\": [\"option A\", \"option B\"]}}, ...]\n\
          Options are suggested answers (2-4 per question, may be empty for free-text questions).",
         name = meta.name,
         desc = meta.description,
@@ -141,6 +143,7 @@ pub fn generate_questions(
             out.push(GenQuestion {
                 question: question.to_string(),
                 options,
+                topic: q["topic"].as_str().map(String::from),
             });
         }
     }

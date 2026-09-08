@@ -111,6 +111,7 @@ Colour themes: **Tools → Theme** switches live and is remembered in `config.to
 ## Documentation
 
 - `docs/TUI-DESIGN.md` — UI wireframes, interaction flows, settings inventory (also as PDF in `docs/`)
+- `ROADMAP.md` — implementation status: done, partial and remaining work toward v1.0
 - CI: `.github/workflows/ci.yml` (fmt, clippy `-D warnings`, tests on Windows/Linux/macOS)
 
 ## License

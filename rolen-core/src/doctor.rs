@@ -51,9 +51,9 @@ pub fn run_all() -> Vec<Check> {
                 out.push(Check::ok(
                     "config.toml",
                     if created {
-                        "created default".to_string()
+                        format!("created default (schema v{})", config::CONFIG_SCHEMA)
                     } else {
-                        "loaded".to_string()
+                        format!("loaded (schema v{})", cfg.schema)
                     },
                 ));
                 cfg_opt = Some(cfg);

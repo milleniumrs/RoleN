@@ -25,6 +25,9 @@ pub const BUILT_IN_ROLES: &[&str] = &[
 
 // --------------------------------------------------------------- RuleSet
 
+/// FR-3.5: project-local rules are evaluated ahead of global rules.
+const PROJECT_OVERRIDE_PRIORITY_BONUS: i32 = 1000;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RuleSet {
     #[serde(default)]
@@ -53,6 +56,20 @@ impl RuleSet {
         let mut v: Vec<&Rule> = self.rules.iter().filter(|r| r.role == role).collect();
         v.sort_by_key(|r| -r.priority);
         v
+    }
+
+    /// FR-3.5: merge project-local overrides ahead of the global rules. The
+    /// priority bonus makes an override win over a global rule for the same
+    /// role even when the global rule has a higher hand-written priority.
+    pub fn merged_with(&self, overrides: &[Rule]) -> RuleSet {
+        let mut rules = Vec::with_capacity(overrides.len() + self.rules.len());
+        for r in overrides {
+            let mut r = r.clone();
+            r.priority += PROJECT_OVERRIDE_PRIORITY_BONUS;
+            rules.push(r);
+        }
+        rules.extend(self.rules.clone());
+        RuleSet { rules }
     }
 }
 
@@ -493,5 +510,28 @@ mod tests {
         let rules = RuleSet { rules: vec![r] };
         let ctx = ctx_with(vec![("a", true, None, vec!["m1"])]);
         assert!(decide(&rules, "coder", &ctx).is_err()); // different/no project
+    }
+
+    #[test]
+    fn project_overrides_beat_global_rules() {
+        let mut global = rule("global", vec!["b/m2"], None);
+        global.priority = 10;
+        let global_rules = RuleSet {
+            rules: vec![global],
+        };
+        let override_rule = rule("project-local", vec!["a/m1"], None);
+        let merged = global_rules.merged_with(&[override_rule]);
+        let ctx = ctx_with(vec![
+            ("a", true, None, vec!["m1"]),
+            ("b", true, None, vec!["m2"]),
+        ]);
+        let d = decide(&merged, "coder", &ctx).unwrap();
+        assert_eq!(d.rule_id, "project-local");
+        assert_eq!(d.provider, "a");
+
+        // no overrides → identical behavior
+        let d = decide(&global_rules.merged_with(&[]), "coder", &ctx).unwrap();
+        assert_eq!(d.rule_id, "global");
+        assert_eq!(d.provider, "b");
     }
 }

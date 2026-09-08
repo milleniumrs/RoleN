@@ -9,16 +9,20 @@ use crate::error::AdapterError;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct PtyResult {
     pub exit_code: Option<i32>,
     /// True when the global timeout fired and the child was killed.
     pub timed_out: bool,
+    /// FR-8.4: true when the shared cancel flag asked us to kill the child.
+    pub cancelled: bool,
 }
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub fn run_pty(
     program: &Path,
@@ -26,7 +30,7 @@ pub fn run_pty(
     cwd: &Path,
     on_chunk: &mut dyn FnMut(&str),
 ) -> Result<PtyResult, AdapterError> {
-    run_pty_timeout(program, args, cwd, DEFAULT_TIMEOUT, on_chunk)
+    run_pty_cancellable(program, args, cwd, DEFAULT_TIMEOUT, None, on_chunk)
 }
 
 pub fn run_pty_timeout(
@@ -34,6 +38,19 @@ pub fn run_pty_timeout(
     args: &[String],
     cwd: &Path,
     timeout: Duration,
+    on_chunk: &mut dyn FnMut(&str),
+) -> Result<PtyResult, AdapterError> {
+    run_pty_cancellable(program, args, cwd, timeout, None, on_chunk)
+}
+
+/// FR-8.4: cancel-aware PTY run. When `cancel` is set, the child is killed at
+/// the next poll boundary and the result is reported as `cancelled`.
+pub fn run_pty_cancellable(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    cancel: Option<Arc<AtomicBool>>,
     on_chunk: &mut dyn FnMut(&str),
 ) -> Result<PtyResult, AdapterError> {
     let pty_system = native_pty_system();
@@ -91,6 +108,7 @@ pub fn run_pty_timeout(
 
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut cancelled = false;
     let exit_code = loop {
         // drain available output
         while let Ok(chunk) = rx.try_recv() {
@@ -115,6 +133,16 @@ pub fn run_pty_timeout(
             Ok(None) => {}
             Err(e) => return Err(AdapterError::Pty(format!("try_wait: {e}"))),
         }
+        if cancel
+            .as_ref()
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            cancelled = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
         if Instant::now() > deadline {
             timed_out = true;
             let _ = child.kill();
@@ -127,5 +155,6 @@ pub fn run_pty_timeout(
     Ok(PtyResult {
         exit_code,
         timed_out,
+        cancelled,
     })
 }

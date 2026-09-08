@@ -151,6 +151,12 @@ fn cli_task_worker(conector: &BackgroundTaskConector<CliTaskMsg, bool>) {
             rolen_cliadapters::CliEvent::Output(chunk) => {
                 conector.notify(CliTaskMsg::Output(chunk));
             }
+            rolen_cliadapters::CliEvent::Paused => {
+                conector.notify(CliTaskMsg::Output("⏸ paused (snapshot written)\n".into()));
+            }
+            rolen_cliadapters::CliEvent::Resumed => {
+                conector.notify(CliTaskMsg::Output("▶ resumed\n".into()));
+            }
             rolen_cliadapters::CliEvent::Harvested {
                 applied,
                 rejected,
@@ -977,7 +983,7 @@ impl MissionControl {
                 options: q.options.clone(),
                 answer,
                 status,
-                linked_prd_path: None,
+                linked_prd_path: rolen_core::project::prd_path_for_topic(q.topic.as_deref()),
                 ts: chrono::Utc::now(),
             });
         }
@@ -1257,6 +1263,8 @@ impl MissionControl {
             c.status = rolen_core::types::ClarificationStatus::Answered;
         }
         if let Err(e) = meta.save(&dir) {
+            dialogs::error("Answer", &e.to_string());
+        } else if let Err(e) = rolen_core::project::refresh_prd_json_clarifications(&dir) {
             dialogs::error("Answer", &e.to_string());
         }
         self.refresh_questions();

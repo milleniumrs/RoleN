@@ -14,5 +14,7 @@ pub mod session;
 pub mod spec;
 
 pub use error::AdapterError;
-pub use session::{run_cli_session, CliEvent, CliSessionReport};
+pub use session::{
+    run_cli_session, run_cli_session_with, CliCheckpointOptions, CliEvent, CliSessionReport,
+};
 pub use spec::CliSpec;

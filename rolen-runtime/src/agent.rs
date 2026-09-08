@@ -102,19 +102,35 @@ fn is_retryable(e: &providers::ProviderError) -> bool {
         || s.contains("overloaded")
 }
 
+/// FR-3.5: load the global rules plus the current project's rules_override,
+/// and return the project id used for project-scoped conditions.
+fn project_routing(opts: &AgentOptions) -> Result<(RuleSet, Option<String>), RuntimeError> {
+    let mut rules = RuleSet::load()?;
+    let project_dir = opts
+        .project_dir
+        .clone()
+        .or_else(|| rolen_core::project::find_project_dir_upwards(&opts.workdir));
+    if let Some(dir) = project_dir {
+        let meta = rolen_core::project::ProjectMeta::load(&dir)?;
+        rules = rules.merged_with(&meta.rules_override);
+        return Ok((rules, Some(meta.id)));
+    }
+    Ok((rules, None))
+}
+
 /// FR-3.3 mid-session migration: re-run routing with the failing provider
 /// marked unhealthy, returning the next fallback provider/model.
 fn migrate(
-    role: &str,
+    opts: &AgentOptions,
     failed_provider: &str,
     reg: &providers::ProviderRegistry,
 ) -> Option<(rolen_core::types::Provider, String)> {
-    let rules = RuleSet::load().ok()?;
-    let mut ctx = providers::routing::collect(None, None).ok()?;
+    let (rules, project) = project_routing(opts).ok()?;
+    let mut ctx = providers::routing::collect(None, project).ok()?;
     if let Some(state) = ctx.providers.get_mut(failed_provider) {
         state.healthy = false;
     }
-    let decision = rules::decide(&rules, role, &ctx).ok()?;
+    let decision = rules::decide(&rules, &opts.role, &ctx).ok()?;
     if decision.provider == failed_provider {
         return None;
     }
@@ -393,7 +409,7 @@ pub fn run(
                                 // session simply continues on the next fallback.
                                 migrations += 1;
                                 if let Some((new_provider, new_model)) =
-                                    migrate(&opts.role, &provider_id, &reg)
+                                    migrate(opts, &provider_id, &reg)
                                 {
                                     let new_provider_id = new_provider.id.clone();
                                     // Release the old provider's slot before waiting on the
@@ -573,8 +589,8 @@ fn resolve_route(opts: &AgentOptions) -> Result<(String, String, String, String)
             "override".into(),
         ));
     }
-    let rules = RuleSet::load()?;
-    let ctx = providers::routing::collect(None, None)?;
+    let (rules, project) = project_routing(opts)?;
+    let ctx = providers::routing::collect(None, project)?;
     let decision = rules::decide(&rules, &opts.role, &ctx)?;
     let model = match &opts.model_override {
         Some(m) => m.clone(),

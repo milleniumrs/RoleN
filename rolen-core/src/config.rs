@@ -8,6 +8,10 @@ use std::path::PathBuf;
 
 const APP_DIR: &str = "rolen";
 
+/// Current config.toml schema version (FR-14.3). Files without a `schema`
+/// key are treated as v1 and migrated forward on load.
+pub const CONFIG_SCHEMA: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct General {
     pub workspace_root: PathBuf,
@@ -34,6 +38,11 @@ fn default_queue_cap() -> usize {
     1000
 }
 
+/// Config files predating schema versioning had no `schema` key.
+fn default_schema() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quotas {
     pub warn_pct: u8,
@@ -43,6 +52,9 @@ pub struct Quotas {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// FR-14.3: config.toml schema version. Missing on v1 files.
+    #[serde(default = "default_schema")]
+    pub schema: u32,
     pub general: General,
     pub parallelism: Parallelism,
     pub quotas: Quotas,
@@ -54,6 +66,7 @@ impl Default for Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("rolen-workspaces");
         Self {
+            schema: CONFIG_SCHEMA,
             general: General {
                 workspace_root,
                 theme: "dark".into(),
@@ -202,14 +215,46 @@ pub fn ensure_dirs() -> Result<(PathBuf, PathBuf), CoreError> {
 // ------------------------------------------------------------- load / save
 
 impl Config {
+    /// Parse config text, upgrading older schema versions in memory. Returns
+    /// `(config, rewritten)` where `rewritten` means the on-disk file should be
+    /// re-saved with the current schema. Future versions are rejected.
+    pub fn migrate(text: &str) -> Result<(Self, bool), CoreError> {
+        let value: toml::Value = toml::from_str(text)?;
+        let schema = value
+            .get("schema")
+            .and_then(|v| v.as_integer())
+            .map(|i| i.max(0) as u32)
+            .unwrap_or(1);
+        if schema > CONFIG_SCHEMA {
+            return Err(CoreError::Vault(format!(
+                "config.toml schema v{schema} is newer than this RoleN supports (v{CONFIG_SCHEMA})"
+            )));
+        }
+        let mut cfg: Self = toml::from_str(text)?;
+        if schema < CONFIG_SCHEMA {
+            cfg.schema = CONFIG_SCHEMA;
+            return Ok((cfg, true));
+        }
+        cfg.schema = CONFIG_SCHEMA;
+        Ok((cfg, false))
+    }
+
     pub fn load() -> Result<Self, CoreError> {
         let text = fs::read_to_string(config_file()?)?;
-        Ok(toml::from_str(&text)?)
+        let (cfg, rewritten) = Self::migrate(&text)?;
+        if rewritten {
+            let path = config_file()?;
+            fs::copy(&path, path.with_extension("toml.bak"))?;
+            cfg.save()?;
+        }
+        Ok(cfg)
     }
 
     pub fn save(&self) -> Result<(), CoreError> {
         ensure_dirs()?;
-        let text = toml::to_string_pretty(self)?;
+        let mut stamped = self.clone();
+        stamped.schema = CONFIG_SCHEMA;
+        let text = toml::to_string_pretty(&stamped)?;
         fs::write(config_file()?, text)?;
         Ok(())
     }
@@ -231,5 +276,57 @@ impl Config {
     pub fn ensure_workspace_root(&self) -> Result<(), CoreError> {
         fs::create_dir_all(&self.general.workspace_root)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v1_text() -> String {
+        toml::to_string_pretty(&toml::toml! {
+            [general]
+            workspace_root = "C:/ws"
+            theme = "dark"
+            question_mode = "thorough"
+
+            [parallelism]
+            global_cap = 0
+            per_provider_cap = 2
+            queue_cap = 1000
+
+            [quotas]
+            warn_pct = 80
+            crit_pct = 95
+            action = "notify"
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn schema_less_v1_config_migrates_to_current() {
+        let (cfg, rewritten) = Config::migrate(&v1_text()).unwrap();
+        assert!(rewritten);
+        assert_eq!(cfg.schema, CONFIG_SCHEMA);
+        assert_eq!(cfg.parallelism.queue_cap, 1000);
+        // idempotent: migrating the stamped text is a no-op
+        let stamped = toml::to_string_pretty(&cfg).unwrap();
+        let (_cfg2, rewritten2) = Config::migrate(&stamped).unwrap();
+        assert!(!rewritten2);
+    }
+
+    #[test]
+    fn future_schema_is_rejected() {
+        let text = v1_text().replacen("[general]", "schema = 99\n\n[general]", 1);
+        let err = Config::migrate(&text).unwrap_err().to_string();
+        assert!(err.contains("newer"));
+    }
+
+    #[test]
+    fn default_config_is_stamped_with_current_schema() {
+        let cfg = Config::default();
+        assert_eq!(cfg.schema, CONFIG_SCHEMA);
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(text.contains(&format!("schema = {CONFIG_SCHEMA}")));
     }
 }

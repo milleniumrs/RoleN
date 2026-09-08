@@ -146,12 +146,15 @@ enum CliAction {
         /// Provider id of type cli (e.g. cli-claude)
         #[arg(long)]
         provider: String,
-        /// Task instruction for the CLI agent
-        #[arg(long)]
+        /// Task instruction for the CLI agent (optional with --resume)
+        #[arg(long, default_value = "")]
         task: String,
         /// Workspace directory (the CLI runs in an overlay copy of it)
         #[arg(long, default_value = ".")]
         workdir: String,
+        /// Resume from a snapshot written by an interrupted/paused CLI session (FR-8.4)
+        #[arg(long)]
+        resume: Option<String>,
     },
 }
 
@@ -448,7 +451,11 @@ fn cli_cmd(action: CliAction) -> Result<()> {
             provider,
             task,
             workdir,
+            resume,
         } => {
+            if task.trim().is_empty() && resume.is_none() {
+                anyhow::bail!("--task is required unless --resume is given");
+            }
             let reg = providers::ProviderRegistry::load()?;
             let p = reg
                 .get(&provider)
@@ -466,12 +473,18 @@ fn cli_cmd(action: CliAction) -> Result<()> {
                 "▶ wrapping '{}' in PTY (overlay + harvest via write queue)…",
                 p.id
             );
+            let checkpoint = rolen_cliadapters::CliCheckpointOptions {
+                cancel: Some(cancel_on_ctrlc()),
+                pause: None,
+                resume_from: resume.map(std::path::PathBuf::from),
+            };
             let mut last_print = std::time::Instant::now();
-            let report = rolen_cliadapters::run_cli_session(
+            let report = rolen_cliadapters::run_cli_session_with(
                 &p,
                 &task,
                 &workdir,
                 None,
+                Some(&checkpoint),
                 &mut |ev| match ev {
                     rolen_cliadapters::CliEvent::Output(_) => {
                         // throttle raw PTY output to one heartbeat per second
@@ -479,6 +492,12 @@ fn cli_cmd(action: CliAction) -> Result<()> {
                             last_print = std::time::Instant::now();
                             println!("  … cli working …");
                         }
+                    }
+                    rolen_cliadapters::CliEvent::Paused => {
+                        println!("⏸ cli session paused before spawn (snapshot written)");
+                    }
+                    rolen_cliadapters::CliEvent::Resumed => {
+                        println!("▶ cli session resumed");
                     }
                     rolen_cliadapters::CliEvent::Harvested {
                         applied,
@@ -503,6 +522,12 @@ fn cli_cmd(action: CliAction) -> Result<()> {
                 report.tokens_in_est, report.tokens_out_est
             );
             println!("transcript: {}", report.transcript_path.display());
+            if report.interrupted {
+                if let Some(path) = rolen_runtime::agent::snapshot_path(&report.session_id) {
+                    println!("context snapshot kept: {}", path.display());
+                }
+                std::process::exit(130);
+            }
             if report.exit_code != Some(0) {
                 std::process::exit(1);
             }
@@ -577,7 +602,7 @@ fn run_interview(
             options: q.options.clone(),
             answer,
             status,
-            linked_prd_path: None,
+            linked_prd_path: rolen_core::project::prd_path_for_topic(q.topic.as_deref()),
             ts: chrono::Utc::now(),
         });
     }
@@ -1074,7 +1099,17 @@ fn rule_cmd(action: RuleAction) -> Result<()> {
             task_type,
             project,
         } => {
-            let rules = RuleSet::load()?;
+            let mut rules = RuleSet::load()?;
+            let mut project = project;
+            // FR-3.5: a known project contributes its rules_override to the
+            // dry-run, and routing sees the canonical project id.
+            if let Some(p) = &project {
+                if let Some((_dir, meta)) = rolen_core::project::find_project(&workspace_root()?, p)
+                {
+                    rules = rules.merged_with(&meta.rules_override);
+                    project = Some(meta.id);
+                }
+            }
             println!("collecting provider state (health, quotas)…");
             let ctx = providers::routing::collect(task_type, project)?;
             match rolen_core::rules::decide(&rules, &role, &ctx) {
