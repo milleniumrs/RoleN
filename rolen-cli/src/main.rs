@@ -57,9 +57,10 @@ enum Commands {
         /// Workspace directory the agent is sandboxed to (project dir when --project)
         #[arg(long, default_value = ".")]
         workdir: String,
-        /// Project id: run inside that project (FR-11.2)
+        /// Project id: run inside that project (FR-11.2). Repeat to run several
+        /// project DAGs concurrently in one process (FR-8.1).
         #[arg(long)]
-        project: Option<String>,
+        project: Vec<String>,
         /// Accepted for CI parity — run is always headless (FR-11.2)
         #[arg(long)]
         headless: bool,
@@ -761,20 +762,28 @@ fn batch_cmd(
     if !watch {
         println!("batch: {} task(s), workdir {workdir}", spec.tasks.len());
     }
-    exec_batch(spec, workdir.into(), max_parallel, &allow_shell, watch)
+    exec_projects(
+        vec![rolen_orchestrator::ProjectRun {
+            project_id: "batch".into(),
+            spec,
+            workdir: workdir.into(),
+        }],
+        max_parallel,
+        &allow_shell,
+        watch,
+    )
 }
 
 /// Shared DAG execution for `rolen batch` and `rolen run --project` (FR-11.2).
-/// CI-safe exit codes: 0 = all tasks done, 1 = any task failed.
-fn exec_batch(
-    spec: rolen_orchestrator::BatchSpec,
-    workdir: std::path::PathBuf,
+/// Several projects share one task-slot budget (FR-8.1); CI-safe exit codes:
+/// 0 = all tasks done, 1 = any task failed.
+fn exec_projects(
+    runs: Vec<rolen_orchestrator::ProjectRun>,
     max_parallel: usize,
     allow_shell: &str,
     watch: bool,
 ) -> Result<()> {
-    let opts = rolen_orchestrator::BatchOptions {
-        workdir,
+    let opts = rolen_orchestrator::SharedBatchOptions {
         max_parallel,
         shell_allow: allow_shell
             .split(',')
@@ -784,10 +793,10 @@ fn exec_batch(
         cancel: Some(cancel_on_ctrlc()),
         pause: None,
     };
-    let report = rolen_orchestrator::run_batch(&spec, &opts, &mut |ev| {
+    let reports = rolen_orchestrator::run_projects(runs, &opts, &mut |ev| {
         print_batch_event(ev, watch);
     })?;
-    if !report.failed.is_empty() {
+    if reports.iter().any(|r| !r.failed.is_empty()) {
         std::process::exit(1);
     }
     Ok(())
@@ -795,39 +804,85 @@ fn exec_batch(
 
 fn print_batch_event(ev: rolen_orchestrator::BatchEvent, watch: bool) {
     use rolen_orchestrator::BatchEvent::*;
+    let label = |project: &str, id: &str| {
+        if project == "batch" {
+            id.to_string()
+        } else {
+            format!("{project}/{id}")
+        }
+    };
     if watch {
         // FR-11.4: NDJSON event stream for external tooling
         let line = match &ev {
-            TaskStarted { id, role } => {
-                serde_json::json!({"event": "task_started", "id": id, "role": role})
+            TaskStarted { project, id, role } => {
+                serde_json::json!({"event": "task_started", "project": project, "id": id, "role": role})
             }
-            Waiting { id, reason } => {
-                serde_json::json!({"event": "waiting", "id": id, "reason": reason})
+            Waiting {
+                project,
+                id,
+                reason,
+            } => {
+                serde_json::json!({"event": "waiting", "project": project, "id": id, "reason": reason})
             }
-            TaskDone { id, tokens, steps } => {
-                serde_json::json!({"event": "task_done", "id": id, "tokens": tokens, "steps": steps})
+            TaskDone {
+                project,
+                id,
+                tokens,
+                steps,
+            } => {
+                serde_json::json!({"event": "task_done", "project": project, "id": id, "tokens": tokens, "steps": steps})
             }
-            TaskFailed { id, error } => {
-                serde_json::json!({"event": "task_failed", "id": id, "error": error})
+            TaskFailed { project, id, error } => {
+                serde_json::json!({"event": "task_failed", "project": project, "id": id, "error": error})
             }
-            Agent { id, line } => serde_json::json!({"event": "agent", "id": id, "line": line}),
-            AllDone { done, failed } => {
-                serde_json::json!({"event": "all_done", "done": done, "failed": failed})
+            Agent { project, id, line } => {
+                serde_json::json!({"event": "agent", "project": project, "id": id, "line": line})
+            }
+            AllDone {
+                project,
+                done,
+                failed,
+            } => {
+                serde_json::json!({"event": "all_done", "project": project, "done": done, "failed": failed})
             }
         };
         println!("{line}");
         return;
     }
     match ev {
-        TaskStarted { id, role } => println!("▶ {id} started (role {role})"),
-        Waiting { id, reason } => println!("… {id} waiting: {reason}"),
-        TaskDone { id, tokens, steps } => {
-            println!("✅ {id} done ({steps} steps, {tokens} tokens, checkpoint committed)")
+        TaskStarted { project, id, role } => {
+            println!("▶ {} started (role {role})", label(&project, &id))
         }
-        TaskFailed { id, error } => println!("❌ {id} failed: {error}"),
-        Agent { id, line } => println!("[{id}] {line}"),
-        AllDone { done, failed } => {
-            println!("\n=== batch finished: {done} done, {failed} failed ===")
+        Waiting {
+            project,
+            id,
+            reason,
+        } => println!("… {} waiting: {reason}", label(&project, &id)),
+        TaskDone {
+            project,
+            id,
+            tokens,
+            steps,
+        } => {
+            println!(
+                "✅ {} done ({steps} steps, {tokens} tokens, checkpoint committed)",
+                label(&project, &id)
+            )
+        }
+        TaskFailed { project, id, error } => {
+            println!("❌ {} failed: {error}", label(&project, &id))
+        }
+        Agent { project, id, line } => println!("[{}] {line}", label(&project, &id)),
+        AllDone {
+            project,
+            done,
+            failed,
+        } => {
+            if project == "batch" {
+                println!("\n=== batch finished: {done} done, {failed} failed ===")
+            } else {
+                println!("\n=== {project} finished: {done} done, {failed} failed ===")
+            }
         }
     }
 }
@@ -1071,7 +1126,7 @@ struct RunArgs {
     role: Option<String>,
     task: String,
     workdir: String,
-    project: Option<String>,
+    project: Vec<String>,
     #[allow(dead_code)] // accepted for CI parity (FR-11.2); run is always headless
     headless: bool,
     provider: Option<String>,
@@ -1085,51 +1140,73 @@ struct RunArgs {
 fn run_cmd(a: RunArgs) -> Result<()> {
     // FR-11.2: with --project, run inside the project workspace and --task
     // selects a task id from tasks.yaml (omit it to run the whole DAG).
-    if let Some(project) = &a.project {
+    // FR-8.1: repeat --project to run several project DAGs concurrently.
+    if !a.project.is_empty() {
         let root = workspace_root()?;
-        let (dir, meta) = rolen_core::project::find_project(&root, project).ok_or_else(|| {
-            anyhow::anyhow!(
-                "project '{project}' not found in {} — run `rolen project list`",
-                root.display()
-            )
-        })?;
-        let spec_path = dir.join("tasks.yaml");
-        let spec = rolen_orchestrator::BatchSpec::load(&spec_path).map_err(|e| {
-            anyhow::anyhow!("{e} — run `rolen project build --name {}` first", meta.id)
-        })?;
-        if a.task.trim().is_empty() {
-            return exec_batch(spec, dir, 0, &a.allow_shell, a.json);
-        }
-        let t = spec
-            .tasks
-            .iter()
-            .find(|t| t.id == a.task)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no task '{}' in {} — ids: {}",
-                    a.task,
-                    spec_path.display(),
-                    spec.tasks
-                        .iter()
-                        .map(|t| t.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+        let mut runs = Vec::new();
+        for project in &a.project {
+            let (dir, meta) =
+                rolen_core::project::find_project(&root, project).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "project '{project}' not found in {} — run `rolen project list`",
+                        root.display()
+                    )
+                })?;
+            let spec_path = dir.join("tasks.yaml");
+            let spec = rolen_orchestrator::BatchSpec::load(&spec_path).map_err(|e| {
+                anyhow::anyhow!("{e} — run `rolen project build --name {}` first", meta.id)
             })?;
-        return run_resolved(ResolvedRun {
-            workdir: dir,
-            role: t.role,
-            task: t.task,
-            expected_paths: t.claimed_paths,
-            task_id: Some(t.id),
-            provider: a.provider.clone().or(t.provider),
-            model: a.model.clone().or(t.model),
-            max_steps: a.max_steps,
-            allow_shell: &a.allow_shell,
-            json: a.json,
-            resume: a.resume.clone(),
-        });
+            runs.push((meta.id.clone(), dir, spec));
+        }
+
+        if runs.len() == 1 && !a.task.trim().is_empty() {
+            let (_project_id, dir, spec) = runs.remove(0);
+            let spec_path = dir.join("tasks.yaml");
+            let t = spec
+                .tasks
+                .iter()
+                .find(|t| t.id == a.task)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no task '{}' in {} — ids: {}",
+                        a.task,
+                        spec_path.display(),
+                        spec.tasks
+                            .iter()
+                            .map(|t| t.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+            return run_resolved(ResolvedRun {
+                workdir: dir,
+                role: t.role,
+                task: t.task,
+                expected_paths: t.claimed_paths,
+                task_id: Some(t.id),
+                provider: a.provider.clone().or(t.provider),
+                model: a.model.clone().or(t.model),
+                max_steps: a.max_steps,
+                allow_shell: &a.allow_shell,
+                json: a.json,
+                resume: a.resume.clone(),
+            });
+        }
+        if !a.task.trim().is_empty() {
+            anyhow::bail!("--task selects one task id and only works with a single --project");
+        }
+        let runs = runs
+            .into_iter()
+            .map(
+                |(project_id, workdir, spec)| rolen_orchestrator::ProjectRun {
+                    project_id,
+                    spec,
+                    workdir,
+                },
+            )
+            .collect();
+        return exec_projects(runs, 0, &a.allow_shell, a.json);
     }
 
     let role = a

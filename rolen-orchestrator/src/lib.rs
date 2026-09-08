@@ -11,4 +11,7 @@ pub mod queue;
 pub mod scheduler;
 
 pub use queue::{QueuedWriteSink, TicketHandle, WriteQueue};
-pub use scheduler::{run_batch, BatchEvent, BatchOptions, BatchReport, BatchSpec, TaskSpec};
+pub use scheduler::{
+    run_batch, run_projects, BatchEvent, BatchOptions, BatchReport, BatchSpec, ProjectRun,
+    SharedBatchOptions, TaskSpec,
+};

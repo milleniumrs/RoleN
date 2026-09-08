@@ -91,6 +91,7 @@ rolen run --role coder --task "Create hello.md" --workdir ./scratch
 rolen project new --name my-app    # scaffold + clarification interview
 rolen project build --name my-app  # REQUIREMENTS.md/REQUIREMENTS.json + AGENTS.md + skills + tasks.yaml
 rolen batch --spec tasks.yaml --workdir . --watch   # parallel DAG, NDJSON events
+rolen run --project app-a --project app-b          # several project DAGs, one shared slot budget
 ```
 
 Colour themes: **Tools → Theme** switches live and is remembered in `config.toml`; the Settings window (`F10`) offers the same picker.
