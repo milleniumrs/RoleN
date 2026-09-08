@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod error;
+pub mod limit;
 pub mod sink;
 pub mod tools;
 

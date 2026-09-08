@@ -22,7 +22,7 @@ pub struct General {
 pub struct Parallelism {
     /// 0 = automatic CPU heuristic `max(2, logical_cpus / 2)` (decision D6).
     pub global_cap: usize,
-    /// Max concurrent sessions per provider.
+    /// Max concurrent sessions per provider. 0 = unlimited.
     pub per_provider_cap: usize,
     /// FR-7.8 backpressure: max write tickets pending in the queue before
     /// submitters block. 0 = unlimited.

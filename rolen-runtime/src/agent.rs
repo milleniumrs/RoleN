@@ -175,6 +175,9 @@ pub fn run(
         .clone();
     let mut provider_id = provider_id;
     let mut model = model;
+    // FR-8.1: cap concurrent sessions per provider. The permit is held for the
+    // whole session and moved across FR-3.3 migrations.
+    let mut provider_permit = Some(crate::limit::acquire(&provider_id));
 
     // ---- session + ledger ----
     let session_id = format!(
@@ -392,15 +395,21 @@ pub fn run(
                                 if let Some((new_provider, new_model)) =
                                     migrate(&opts.role, &provider_id, &reg)
                                 {
+                                    let new_provider_id = new_provider.id.clone();
+                                    // Release the old provider's slot before waiting on the
+                                    // next one; otherwise a full fallback provider could
+                                    // deadlock a cap=1 setup.
+                                    drop(provider_permit.take());
+                                    provider_permit = Some(crate::limit::acquire(&new_provider_id));
                                     emit(
                                         AgentEvent::Migrated {
                                             from: provider_id.clone(),
-                                            to: new_provider.id.clone(),
+                                            to: new_provider_id.clone(),
                                             model: new_model.clone(),
                                         },
                                         &mut transcript,
                                     );
-                                    provider_id = new_provider.id.clone();
+                                    provider_id = new_provider_id;
                                     model = new_model;
                                     provider = new_provider;
                                     attempt = 0;
