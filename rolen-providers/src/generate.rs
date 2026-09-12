@@ -185,7 +185,8 @@ pub fn generate_prd(meta: &ProjectMeta) -> Result<PrdContent, ProviderError> {
             text.chars().take(200).collect::<String>()
         ))
     })?;
-    serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("Requirements JSON shape: {e}")))
+    serde_json::from_value(v)
+        .map_err(|e| ProviderError::Parse(format!("Requirements JSON shape: {e}")))
 }
 
 /// Raw LLM call for DAG generation (used by rolen-orchestrator::daggen).
