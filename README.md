@@ -30,9 +30,7 @@ RoleN lets a developer who owns **several LLM subscriptions and CLI tools** trea
 
 ## Architecture
 
-![RoleN architecture](docs/architecture.png)
-
-*Source: docs/architecture.drawio — edit in [draw.io](https://app.diagrams.net) and re-export as PNG over docs/architecture.png.*
+*Source: docs/architecture.drawio — edit in [draw.io](https://app.diagrams.net).*
 
 Cargo workspace crates:
 

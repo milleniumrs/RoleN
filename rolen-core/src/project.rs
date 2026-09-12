@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "rolen-project.yaml";
-pub const Requirements_JSON_SCHEMA: u32 = 1;
+pub const REQUIREMENTS_JSON_SCHEMA: u32 = 1;
 
 // ------------------------------------------------------------------- meta
 
@@ -370,7 +370,7 @@ pub fn render_prd_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
 /// (FR-6.5).
 pub fn prd_json(meta: &ProjectMeta, prd: &PrdContent) -> serde_json::Value {
     serde_json::json!({
-        "schema_version": Requirements_JSON_SCHEMA,
+        "schema_version": REQUIREMENTS_JSON_SCHEMA,
         "meta": {
             "id": meta.id,
             "name": meta.name,
@@ -402,8 +402,8 @@ pub fn validate_prd_json(path: &Path) -> Result<Vec<String>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("json: {e}"))?;
     let mut problems = Vec::new();
-    if v["schema_version"].as_u64() != Some(Requirements_JSON_SCHEMA as u64) {
-        problems.push(format!("schema_version must be {Requirements_JSON_SCHEMA}"));
+    if v["schema_version"].as_u64() != Some(REQUIREMENTS_JSON_SCHEMA as u64) {
+        problems.push(format!("schema_version must be {REQUIREMENTS_JSON_SCHEMA}"));
     }
     if v["meta"]["name"].as_str().unwrap_or("").is_empty() {
         problems.push("meta.name missing".into());

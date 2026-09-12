@@ -430,7 +430,7 @@ fn main() -> Result<()> {
             if problems.is_empty() {
                 println!(
                     "{validate}: valid REQUIREMENTS.json (schema v{})",
-                    rolen_core::project::Requirements_JSON_SCHEMA
+                    rolen_core::project::REQUIREMENTS_JSON_SCHEMA
                 );
             } else {
                 for p in &problems {
@@ -701,7 +701,10 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
             println!("drafting Requirements content (doc-writer role)…");
             let prd = providers::generate::generate_prd(&meta)?;
             proj::write_prd(&dir, &meta, &prd)?;
-            println!("✓ REQUIREMENTS.md + REQUIREMENTS.json ({} features)", prd.features.len());
+            println!(
+                "✓ REQUIREMENTS.md + REQUIREMENTS.json ({} features)",
+                prd.features.len()
+            );
 
             let skills = proj::suggest_skills(&meta, &prd, 5);
             if !skills.is_empty() {
