@@ -1,5 +1,7 @@
 # RoleN Roadmap
 
+Status snapshot: 2026-09-08. This file is the tracked source of truth for implementation status.
+
 Current requirement counts:
 
 - Functional requirements: **54 done, 15 partial, 3 missing**
@@ -116,12 +118,15 @@ Current requirement counts:
 6. **Release hardening**
    - NFR-5 coverage measurement and targeted test backfill.
    - `winget`/`brew` packaging.
-   - Final Requirements/status re-sync and release tag.
+   - Final ROADMAP/status re-sync and release tag.
 
 ---
 
 ## 5. Recent completed milestones
 
-- `8e82fbe` - multi-project DAG execution with fair queue sharing.
-- `0d40ee3` - runtime-enforced per-provider session caps.
-- Latest chunk - wrapped-CLI checkpointing, config schema migration, project rule overrides and question linkage.
+Hashes below are post-rewrite (`git filter-repo` removed the tracked planning documents).
+
+- `a0034e6` - multi-project DAG execution with fair queue sharing.
+- `876aaa6` - runtime-enforced per-provider session caps.
+- `6baa8a2` - wrapped-CLI checkpointing, config schema migration, project rule overrides and question linkage.
+- `5f90ec1` - local planning documents ignored after the history rewrite.

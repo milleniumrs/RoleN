@@ -475,7 +475,7 @@ impl MissionControl {
     fn not_yet(&self, what: &str) {
         dialogs::message(
             "RoleN",
-            &format!("'{what}' arrives in a later milestone — see REQUIREMENTS.md §9 roadmap."),
+            &format!("'{what}' arrives in a later milestone — see ROADMAP.md."),
         );
     }
 

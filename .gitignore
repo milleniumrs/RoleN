@@ -27,8 +27,3 @@ dist/
 # draw.io autosave backups
 .$*.bkp
 .$*.drawio
-# Requirements working copies are local-only material, not release source
-/REQUIREMENTS.md
-/REQUIREMENTS.json
-/docs/REQUIREMENTS.md
-/docs/REQUIREMENTS.json
