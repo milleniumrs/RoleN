@@ -107,7 +107,7 @@ enum Commands {
         action: ProjectAction,
     },
     /// Validate a REQUIREMENTS.json file
-    Prd {
+    Requirements {
         #[arg(long)]
         validate: String,
     },
@@ -424,9 +424,10 @@ fn main() -> Result<()> {
         Some(Commands::Cli { action }) => cli_cmd(action)?,
         Some(Commands::Sessions { limit, json }) => sessions_cmd(limit, json)?,
         Some(Commands::Export { what, format, out }) => export_cmd(&what, &format, out)?,
-        Some(Commands::Prd { validate }) => {
-            let problems = rolen_core::project::validate_prd_json(std::path::Path::new(&validate))
-                .map_err(|e| anyhow::anyhow!(e))?;
+        Some(Commands::Requirements { validate }) => {
+            let problems =
+                rolen_core::project::validate_requirements_json(std::path::Path::new(&validate))
+                    .map_err(|e| anyhow::anyhow!(e))?;
             if problems.is_empty() {
                 println!(
                     "{validate}: valid REQUIREMENTS.json (schema v{})",
@@ -602,7 +603,9 @@ fn run_interview(
             options: q.options.clone(),
             answer,
             status,
-            linked_prd_path: rolen_core::project::prd_path_for_topic(q.topic.as_deref()),
+            linked_requirements_path: rolen_core::project::requirements_path_for_topic(
+                q.topic.as_deref(),
+            ),
             ts: chrono::Utc::now(),
         });
     }
@@ -659,7 +662,7 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
                 return Ok(());
             }
             for (dir, m) in projects {
-                let prd = if dir.join("REQUIREMENTS.json").exists() {
+                let requirements = if dir.join("REQUIREMENTS.json").exists() {
                     "Requirements ✓"
                 } else {
                     "Requirements —"
@@ -673,7 +676,7 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
                     "{:<20} {:<24} {:<8} {:<9} clarifications: {:<3} {}",
                     m.id,
                     m.name,
-                    prd,
+                    requirements,
                     agents,
                     m.clarifications.len(),
                     dir.display()
@@ -699,14 +702,14 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
             })?;
 
             println!("drafting Requirements content (doc-writer role)…");
-            let prd = providers::generate::generate_prd(&meta)?;
-            proj::write_prd(&dir, &meta, &prd)?;
+            let requirements = providers::generate::generate_requirements(&meta)?;
+            proj::write_requirements(&dir, &meta, &requirements)?;
             println!(
                 "✓ REQUIREMENTS.md + REQUIREMENTS.json ({} features)",
-                prd.features.len()
+                requirements.features.len()
             );
 
-            let skills = proj::suggest_skills(&meta, &prd, 5);
+            let skills = proj::suggest_skills(&meta, &requirements, 5);
             if !skills.is_empty() {
                 println!(
                     "✓ suggested skills: {}",
@@ -722,12 +725,12 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
                 );
             }
 
-            let agents = proj::render_agents_md(&meta, &prd);
+            let agents = proj::render_agents_md(&meta, &requirements);
             std::fs::write(dir.join("AGENTS.md"), agents)?;
             println!("✓ AGENTS.md");
 
             println!("proposing task DAG (planner role)…");
-            match rolen_orchestrator::daggen::generate_dag(&meta, &prd) {
+            match rolen_orchestrator::daggen::generate_dag(&meta, &requirements) {
                 Ok(tasks) => {
                     let spec = rolen_orchestrator::BatchSpec { tasks };
                     let yaml = serde_yaml::to_string(&spec)?;
@@ -761,8 +764,8 @@ fn project_cmd(action: ProjectAction) -> Result<()> {
                     println!("installed skill '{skill}' → {}", dst.display());
                 }
                 None => {
-                    let prd = proj::PrdContent::default(); // match on meta only
-                    for s in proj::suggest_skills(&meta, &prd, 10) {
+                    let requirements = proj::RequirementsContent::default(); // match on meta only
+                    for s in proj::suggest_skills(&meta, &requirements, 10) {
                         let mark = if meta.skills.contains(&s.name) {
                             " (installed)"
                         } else {

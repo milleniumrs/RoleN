@@ -983,7 +983,9 @@ impl MissionControl {
                 options: q.options.clone(),
                 answer,
                 status,
-                linked_prd_path: rolen_core::project::prd_path_for_topic(q.topic.as_deref()),
+                linked_requirements_path: rolen_core::project::requirements_path_for_topic(
+                    q.topic.as_deref(),
+                ),
                 ts: chrono::Utc::now(),
             });
         }
@@ -1002,7 +1004,7 @@ impl MissionControl {
         let Some((dir, meta)) = self.pick_project("Build Project") else {
             return;
         };
-        let prd = match providers::generate::generate_prd(&meta) {
+        let requirements = match providers::generate::generate_requirements(&meta) {
             Ok(p) => p,
             Err(e) => {
                 dialogs::error("Build", &format!("Requirements generation failed: {e}"));
@@ -1012,11 +1014,14 @@ impl MissionControl {
 
         // FR-5.2/5.3: review before writing — full REQUIREMENTS.md on first build,
         // unified diffs against existing files on rebuilds.
-        let new_prd_md = rolen_core::project::render_prd_md(&meta, &prd);
-        let new_agents = rolen_core::project::render_agents_md(&meta, &prd);
+        let new_requirements_md = rolen_core::project::render_requirements_md(&meta, &requirements);
+        let new_agents = rolen_core::project::render_agents_md(&meta, &requirements);
         let mut preview = String::new();
         let mut changes = false;
-        for (file, new) in [("REQUIREMENTS.md", &new_prd_md), ("AGENTS.md", &new_agents)] {
+        for (file, new) in [
+            ("REQUIREMENTS.md", &new_requirements_md),
+            ("AGENTS.md", &new_agents),
+        ] {
             let path = dir.join(file);
             match std::fs::read_to_string(&path) {
                 Ok(old) if old == *new => {
@@ -1047,13 +1052,13 @@ impl MissionControl {
             return;
         }
 
-        if let Err(e) = rolen_core::project::write_prd(&dir, &meta, &prd) {
+        if let Err(e) = rolen_core::project::write_requirements(&dir, &meta, &requirements) {
             dialogs::error("Build", &e.to_string());
             return;
         }
         let _ = std::fs::write(dir.join("AGENTS.md"), &new_agents);
-        let skills = rolen_core::project::suggest_skills(&meta, &prd, 5);
-        let dag_note = match rolen_orchestrator::daggen::generate_dag(&meta, &prd) {
+        let skills = rolen_core::project::suggest_skills(&meta, &requirements, 5);
+        let dag_note = match rolen_orchestrator::daggen::generate_dag(&meta, &requirements) {
             Ok(tasks) => {
                 let spec = rolen_orchestrator::BatchSpec { tasks };
                 match serde_yaml::to_string(&spec) {
@@ -1071,7 +1076,7 @@ impl MissionControl {
             "Build",
             &format!(
                 "✓ REQUIREMENTS.md + REQUIREMENTS.json ({} features)\n✓ AGENTS.md\n✓ suggested skills: {}\n✓ {}",
-                prd.features.len(),
+                requirements.features.len(),
                 skills
                     .iter()
                     .map(|s| s.name.clone())
@@ -1264,7 +1269,7 @@ impl MissionControl {
         }
         if let Err(e) = meta.save(&dir) {
             dialogs::error("Answer", &e.to_string());
-        } else if let Err(e) = rolen_core::project::refresh_prd_json_clarifications(&dir) {
+        } else if let Err(e) = rolen_core::project::refresh_requirements_json_clarifications(&dir) {
             dialogs::error("Answer", &e.to_string());
         }
         self.refresh_questions();

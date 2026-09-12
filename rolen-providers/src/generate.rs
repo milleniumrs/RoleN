@@ -7,7 +7,7 @@ use crate::client;
 use crate::error::ProviderError;
 use crate::registry::ProviderRegistry;
 use crate::routing;
-use rolen_core::project::{PrdContent, ProjectMeta};
+use rolen_core::project::{ProjectMeta, RequirementsContent};
 use rolen_core::rules::{self, RuleSet};
 use rolen_core::types::{Provider, QuestionMode};
 use serde_json::Value;
@@ -156,7 +156,7 @@ pub fn generate_questions(
 }
 
 /// FR-5.2: generate structured Requirements content from meta + answered clarifications.
-pub fn generate_prd(meta: &ProjectMeta) -> Result<PrdContent, ProviderError> {
+pub fn generate_requirements(meta: &ProjectMeta) -> Result<RequirementsContent, ProviderError> {
     let mut clar = String::new();
     for c in &meta.clarifications {
         if let Some(a) = &c.answer {

@@ -141,7 +141,7 @@ pub fn find_project_dir_upwards(start: &Path) -> Option<PathBuf> {
 static QUESTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// FR-6.5: map a clarification topic to the REQUIREMENTS.json section it informs.
-pub fn prd_path_for_topic(topic: Option<&str>) -> Option<String> {
+pub fn requirements_path_for_topic(topic: Option<&str>) -> Option<String> {
     let t = topic?.to_lowercase();
     if t.contains("scope") || t.contains("feature") {
         Some("features".into())
@@ -194,7 +194,7 @@ pub fn record_question_with_topic(
         options: Vec::new(),
         answer: None,
         status: crate::types::ClarificationStatus::Pending,
-        linked_prd_path: prd_path_for_topic(topic),
+        linked_requirements_path: requirements_path_for_topic(topic),
         ts: chrono::Utc::now(),
     };
     meta.clarifications.push(clarification.clone());
@@ -238,7 +238,7 @@ pub fn pending_questions(dir: &Path) -> Vec<Clarification> {
 /// FR-6.5: keep an existing REQUIREMENTS.json's clarifications array in sync with
 /// rolen-project.yaml after answers land mid-project. Other REQUIREMENTS.json sections
 /// are preserved; a full Build still regenerates everything.
-pub fn refresh_prd_json_clarifications(dir: &Path) -> Result<(), CoreError> {
+pub fn refresh_requirements_json_clarifications(dir: &Path) -> Result<(), CoreError> {
     let path = dir.join("REQUIREMENTS.json");
     if !path.exists() {
         return Ok(());
@@ -271,7 +271,7 @@ fn default_priority() -> String {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PrdContent {
+pub struct RequirementsContent {
     #[serde(default)]
     pub overview: String,
     #[serde(default)]
@@ -287,7 +287,7 @@ pub struct PrdContent {
 }
 
 /// Render REQUIREMENTS.md from structured content (FR-5.2).
-pub fn render_prd_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
+pub fn render_requirements_md(meta: &ProjectMeta, requirements: &RequirementsContent) -> String {
     let mut s = String::new();
     s.push_str(&format!(
         "# {} — Product Requirements Document\n\n",
@@ -306,24 +306,24 @@ pub fn render_prd_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
         }
     ));
     s.push_str("## Overview\n\n");
-    s.push_str(&format!("{}\n\n", prd.overview.trim()));
-    if !prd.goals.is_empty() {
+    s.push_str(&format!("{}\n\n", requirements.overview.trim()));
+    if !requirements.goals.is_empty() {
         s.push_str("## Goals\n\n");
-        for g in &prd.goals {
+        for g in &requirements.goals {
             s.push_str(&format!("- {}\n", g.trim()));
         }
         s.push('\n');
     }
-    if !prd.non_goals.is_empty() {
+    if !requirements.non_goals.is_empty() {
         s.push_str("## Non-Goals\n\n");
-        for g in &prd.non_goals {
+        for g in &requirements.non_goals {
             s.push_str(&format!("- {}\n", g.trim()));
         }
         s.push('\n');
     }
-    if !prd.features.is_empty() {
+    if !requirements.features.is_empty() {
         s.push_str("## Features\n\n");
-        for f in &prd.features {
+        for f in &requirements.features {
             s.push_str(&format!(
                 "### {} — {} ({})\n\n{}\n\n",
                 f.id,
@@ -333,16 +333,16 @@ pub fn render_prd_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
             ));
         }
     }
-    if !prd.constraints.is_empty() {
+    if !requirements.constraints.is_empty() {
         s.push_str("## Constraints\n\n");
-        for c in &prd.constraints {
+        for c in &requirements.constraints {
             s.push_str(&format!("- {}\n", c.trim()));
         }
         s.push('\n');
     }
-    if !prd.definition_of_done.is_empty() {
+    if !requirements.definition_of_done.is_empty() {
         s.push_str("## Definition of Done\n\n");
-        for d in &prd.definition_of_done {
+        for d in &requirements.definition_of_done {
             s.push_str(&format!("- [ ] {}\n", d.trim()));
         }
         s.push('\n');
@@ -368,7 +368,10 @@ pub fn render_prd_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
 
 /// REQUIREMENTS.json value (schema-versioned, FR-5.2) with clarification traceability
 /// (FR-6.5).
-pub fn prd_json(meta: &ProjectMeta, prd: &PrdContent) -> serde_json::Value {
+pub fn requirements_json(
+    meta: &ProjectMeta,
+    requirements: &RequirementsContent,
+) -> serde_json::Value {
     serde_json::json!({
         "schema_version": REQUIREMENTS_JSON_SCHEMA,
         "meta": {
@@ -378,27 +381,34 @@ pub fn prd_json(meta: &ProjectMeta, prd: &PrdContent) -> serde_json::Value {
             "stack": meta.stack,
             "created": meta.created,
         },
-        "overview": prd.overview,
-        "goals": prd.goals,
-        "non_goals": prd.non_goals,
-        "features": prd.features,
-        "constraints": prd.constraints,
-        "definition_of_done": prd.definition_of_done,
+        "overview": requirements.overview,
+        "goals": requirements.goals,
+        "non_goals": requirements.non_goals,
+        "features": requirements.features,
+        "constraints": requirements.constraints,
+        "definition_of_done": requirements.definition_of_done,
         "clarifications": meta.clarifications,
     })
 }
 
 /// Write REQUIREMENTS.md + REQUIREMENTS.json into the project dir.
-pub fn write_prd(dir: &Path, meta: &ProjectMeta, prd: &PrdContent) -> Result<(), CoreError> {
-    std::fs::write(dir.join("REQUIREMENTS.md"), render_prd_md(meta, prd))?;
-    let json = serde_json::to_string_pretty(&prd_json(meta, prd))
+pub fn write_requirements(
+    dir: &Path,
+    meta: &ProjectMeta,
+    requirements: &RequirementsContent,
+) -> Result<(), CoreError> {
+    std::fs::write(
+        dir.join("REQUIREMENTS.md"),
+        render_requirements_md(meta, requirements),
+    )?;
+    let json = serde_json::to_string_pretty(&requirements_json(meta, requirements))
         .map_err(|e| CoreError::Vault(format!("REQUIREMENTS.json serialize: {e}")))?;
     std::fs::write(dir.join("REQUIREMENTS.json"), json)?;
     Ok(())
 }
 
-/// Validate a REQUIREMENTS.json file (`rolen prd validate`).
-pub fn validate_prd_json(path: &Path) -> Result<Vec<String>, String> {
+/// Validate a REQUIREMENTS.json file (`rolen requirements validate`).
+pub fn validate_requirements_json(path: &Path) -> Result<Vec<String>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("json: {e}"))?;
     let mut problems = Vec::new();
@@ -423,12 +433,12 @@ pub fn validate_prd_json(path: &Path) -> Result<Vec<String>, String> {
 // ------------------------------------------------------------- AGENTS.md
 
 /// Deterministic AGENTS.md rendering (FR-5.3) — golden-testable.
-pub fn render_agents_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
+pub fn render_agents_md(meta: &ProjectMeta, requirements: &RequirementsContent) -> String {
     let mut s = String::new();
     s.push_str(&format!("# AGENTS.md — {}\n\n", meta.name));
     s.push_str("> Generated by RoleN. Keep it updated when structure, conventions or workflows change.\n\n");
     s.push_str("## Project\n\n");
-    s.push_str(&format!("{}\n\n", prd.overview.trim()));
+    s.push_str(&format!("{}\n\n", requirements.overview.trim()));
     if !meta.stack.is_empty() {
         s.push_str(&format!("**Stack:** {}\n\n", meta.stack.join(", ")));
     }
@@ -444,9 +454,9 @@ pub fn render_agents_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
         }
         s.push('\n');
     }
-    if !prd.features.is_empty() {
+    if !requirements.features.is_empty() {
         s.push_str("## Feature map\n\n");
-        for f in &prd.features {
+        for f in &requirements.features {
             s.push_str(&format!("- **{}** ({}): {}\n", f.id, f.priority, f.title));
         }
         s.push('\n');
@@ -458,9 +468,9 @@ pub fn render_agents_md(meta: &ProjectMeta, prd: &PrdContent) -> String {
         }
         s.push('\n');
     }
-    if !prd.definition_of_done.is_empty() {
+    if !requirements.definition_of_done.is_empty() {
         s.push_str("## Definition of done\n\n");
-        for d in &prd.definition_of_done {
+        for d in &requirements.definition_of_done {
             s.push_str(&format!("- {}\n", d.trim()));
         }
         s.push('\n');
@@ -540,7 +550,7 @@ pub fn parse_skill_md(text: &str) -> Option<SkillInfo> {
 /// Built-in skill library, materialized to `<config>/skills/` on first use so
 /// users can edit/extend it (FR-5.4).
 pub const BUILTIN_SKILLS: &[(&str, &str)] = &[
-    ("prd-refinement", "---\nname: prd-refinement\ndescription: Turn vague ideas into complete Requirementss by hunting corner cases\ntags: [planning, prd, requirements, clarification]\n---\n\n# Requirements Refinement\n\nWhen refining a Requirements: enumerate actors, data entities, error paths, empty states, permission boundaries, scale limits, and offline behavior. Convert every 'should probably' into either a requirement or an explicit non-goal.\n"),
+    ("requirements-refinement", "---\nname: requirements-refinement\ndescription: Turn vague ideas into complete requirements documents by hunting corner cases\ntags: [planning, requirements, clarification]\n---\n\n# Requirements Refinement\n\nWhen refining requirements: enumerate actors, data entities, error paths, empty states, permission boundaries, scale limits, and offline behavior. Convert every 'should probably' into either a requirement or an explicit non-goal.\n"),
     ("agents-md", "---\nname: agents-md\ndescription: Author and maintain AGENTS.md files that keep coding agents effective\ntags: [agents, documentation, conventions]\n---\n\n# AGENTS.md Authoring\n\nKeep AGENTS.md factual: build/test commands that actually work, directory map, conventions with examples, forbidden actions. Update it in the same commit as any structural change.\n"),
     ("git-workflow", "---\nname: git-workflow\ndescription: Branch, checkpoint and review discipline for agent-driven changes\ntags: [git, workflow, review, checkpoints]\n---\n\n# Git Workflow\n\nOne task = one checkpoint commit. Review diffs between checkpoints, not final states. Revert by resetting to the previous checkpoint, never by hand-editing backwards.\n"),
     ("rust-workspace", "---\nname: rust-workspace\ndescription: Cargo workspace layout and crate boundaries for Rust projects\ntags: [rust, cargo, workspace, architecture]\n---\n\n# Rust Workspace\n\nOne crate per responsibility; UI-free core crates; workspace-level dependency versions; `cargo test --workspace` must stay green.\n"),
@@ -580,14 +590,19 @@ pub fn load_skills() -> Result<Vec<SkillInfo>, CoreError> {
 }
 
 /// Suggest skills by keyword overlap with the project text (FR-5.4).
-pub fn suggest_skills(meta: &ProjectMeta, prd: &PrdContent, limit: usize) -> Vec<SkillInfo> {
+pub fn suggest_skills(
+    meta: &ProjectMeta,
+    requirements: &RequirementsContent,
+    limit: usize,
+) -> Vec<SkillInfo> {
     let mut haystack = format!(
         "{} {} {} {} {}",
         meta.name,
         meta.description,
         meta.stack.join(" "),
-        prd.overview,
-        prd.features
+        requirements.overview,
+        requirements
+            .features
             .iter()
             .map(|f| format!("{} {}", f.title, f.description))
             .collect::<Vec<_>>()
@@ -651,8 +666,8 @@ mod tests {
         }
     }
 
-    fn prd() -> PrdContent {
-        PrdContent {
+    fn requirements() -> RequirementsContent {
+        RequirementsContent {
             overview: "A demo project.".into(),
             goals: vec!["Do things".into()],
             non_goals: vec![],
@@ -668,8 +683,8 @@ mod tests {
     }
 
     #[test]
-    fn prd_md_contains_key_sections() {
-        let md = render_prd_md(&meta(), &prd());
+    fn requirements_md_contains_key_sections() {
+        let md = render_requirements_md(&meta(), &requirements());
         assert!(md.contains("# Demo — Product Requirements Document"));
         assert!(md.contains("## Goals"));
         assert!(md.contains("### F1 — Core (must)"));
@@ -677,18 +692,18 @@ mod tests {
     }
 
     #[test]
-    fn prd_json_roundtrip_validates() {
-        let dir = std::env::temp_dir().join(format!("rolen-prd-{}", std::process::id()));
+    fn requirements_json_roundtrip_validates() {
+        let dir = std::env::temp_dir().join(format!("rolen-requirements-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        write_prd(&dir, &meta(), &prd()).unwrap();
-        let problems = validate_prd_json(&dir.join("REQUIREMENTS.json")).unwrap();
+        write_requirements(&dir, &meta(), &requirements()).unwrap();
+        let problems = validate_requirements_json(&dir.join("REQUIREMENTS.json")).unwrap();
         assert!(problems.is_empty(), "problems: {problems:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn agents_md_has_working_agreements_and_commands() {
-        let md = render_agents_md(&meta(), &prd());
+        let md = render_agents_md(&meta(), &requirements());
         assert!(md.contains("write tickets"));
         assert!(md.contains("cargo test --workspace"));
         assert!(md.contains("**F1**"));
@@ -697,13 +712,13 @@ mod tests {
     #[test]
     fn parses_skill_frontmatter() {
         let info = parse_skill_md(BUILTIN_SKILLS[0].1).unwrap();
-        assert_eq!(info.name, "prd-refinement");
+        assert_eq!(info.name, "requirements-refinement");
         assert!(info.tags.contains(&"planning".to_string()));
     }
 
     #[test]
     fn skill_suggestion_matches_stack() {
-        let skills = suggest_skills(&meta(), &prd(), 3);
+        let skills = suggest_skills(&meta(), &requirements(), 3);
         assert!(skills.iter().any(|s| s.name == "rust-workspace"));
     }
 
@@ -722,7 +737,7 @@ mod tests {
         .unwrap();
         assert_eq!(c.status, crate::types::ClarificationStatus::Pending);
         assert_eq!(c.task_id.as_deref(), Some("task-a"));
-        assert_eq!(c.linked_prd_path.as_deref(), Some("constraints"));
+        assert_eq!(c.linked_requirements_path.as_deref(), Some("constraints"));
 
         let pending = pending_question_task_ids(&dir);
         assert!(pending.contains("task-a"));
@@ -739,20 +754,20 @@ mod tests {
     }
 
     #[test]
-    fn topic_maps_to_a_prd_section() {
+    fn topic_maps_to_a_requirements_section() {
         assert_eq!(
-            prd_path_for_topic(Some("data-model")).as_deref(),
+            requirements_path_for_topic(Some("data-model")).as_deref(),
             Some("constraints")
         );
         assert_eq!(
-            prd_path_for_topic(Some("scope")).as_deref(),
+            requirements_path_for_topic(Some("scope")).as_deref(),
             Some("features")
         );
         assert_eq!(
-            prd_path_for_topic(Some("definition-of-done")).as_deref(),
+            requirements_path_for_topic(Some("definition-of-done")).as_deref(),
             Some("definition_of_done")
         );
-        assert_eq!(prd_path_for_topic(None), None);
+        assert_eq!(requirements_path_for_topic(None), None);
     }
 
     #[test]

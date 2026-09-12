@@ -296,7 +296,7 @@ pub struct Project {
     pub name: String,
     pub dir: PathBuf,
     #[serde(default)]
-    pub prd_json: Option<serde_json::Value>,
+    pub requirements_json: Option<serde_json::Value>,
     #[serde(default)]
     pub agents_md_hash: Option<String>,
     #[serde(default)]
@@ -422,8 +422,8 @@ pub struct Clarification {
     #[serde(default)]
     pub answer: Option<String>,
     pub status: ClarificationStatus,
-    #[serde(default)]
-    pub linked_prd_path: Option<String>,
+    #[serde(default, alias = "linked_prd_path")]
+    pub linked_requirements_path: Option<String>,
     pub ts: DateTime<Utc>,
 }
 

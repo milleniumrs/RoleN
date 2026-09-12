@@ -2,14 +2,17 @@
 //! into TaskSpecs with dependencies and claimed paths.
 
 use crate::scheduler::TaskSpec;
-use rolen_core::project::{PrdContent, ProjectMeta};
+use rolen_core::project::{ProjectMeta, RequirementsContent};
 use rolen_providers::generate;
 use rolen_providers::ProviderError;
 
 /// Generate a task DAG from the Requirements. Features become tasks; the planner
 /// assigns deps and non-overlapping claimed_paths.
-pub fn generate_dag(meta: &ProjectMeta, prd: &PrdContent) -> Result<Vec<TaskSpec>, ProviderError> {
-    let features = prd
+pub fn generate_dag(
+    meta: &ProjectMeta,
+    requirements: &RequirementsContent,
+) -> Result<Vec<TaskSpec>, ProviderError> {
+    let features = requirements
         .features
         .iter()
         .map(|f| format!("{} ({}) {}: {}", f.id, f.priority, f.title, f.description))
@@ -29,7 +32,7 @@ pub fn generate_dag(meta: &ProjectMeta, prd: &PrdContent) -> Result<Vec<TaskSpec
          [{{\"id\": \"...\", \"role\": \"...\", \"title\": \"...\", \"task\": \"...\", \"deps\": [...], \"claimed_paths\": [...]}}]",
         name = meta.name,
         stack = if meta.stack.is_empty() { "unspecified".into() } else { meta.stack.join(", ") },
-        overview = prd.overview,
+        overview = requirements.overview,
         features = features,
     );
     let text = generate::generate_text("planner", &prompt, 4096)?;

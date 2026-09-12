@@ -8,7 +8,7 @@ use std::path::Path;
 
 #[ModalWindow(events = ButtonEvents)]
 pub struct ProjectView {
-    ta_prd: Handle<TextArea>,
+    ta_requirements: Handle<TextArea>,
     ta_agents: Handle<TextArea>,
     ta_skills: Handle<TextArea>,
     ta_clar: Handle<TextArea>,
@@ -66,7 +66,7 @@ impl ProjectView {
                 layout!("a:c,w:110,h:30"),
                 window::Flags::Sizeable,
             ),
-            ta_prd: Handle::None,
+            ta_requirements: Handle::None,
             ta_agents: Handle::None,
             ta_skills: Handle::None,
             ta_clar: Handle::None,
@@ -75,7 +75,7 @@ impl ProjectView {
         let mut t = tab!(
             "tabs:[REQUIREMENTS.md,AGENTS.md,Skills,Clarifications],l:0,t:0,r:0,b:2,flags: TransparentBackground"
         );
-        w.ta_prd = t.add(
+        w.ta_requirements = t.add(
             0,
             textarea!("'',l:0,t:0,r:0,b:0,flags: [ReadOnly, ScrollBars]"),
         );
@@ -94,12 +94,12 @@ impl ProjectView {
         w.add(t);
         w.b_close = w.add(button!("'&Close',l:49,b:0,w:12"));
 
-        let prd = read_or(dir, "REQUIREMENTS.md", "Project → Build generates it");
+        let requirements = read_or(dir, "REQUIREMENTS.md", "Project → Build generates it");
         let agents = read_or(dir, "AGENTS.md", "Project → Build generates it");
         let skills = skills_text(meta);
         let clar = clarifications_text(meta);
         for (handle, text) in [
-            (w.ta_prd, prd),
+            (w.ta_requirements, requirements),
             (w.ta_agents, agents),
             (w.ta_skills, skills),
             (w.ta_clar, clar),
