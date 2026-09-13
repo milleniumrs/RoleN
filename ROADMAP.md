@@ -4,7 +4,7 @@ Status snapshot: 2026-09-08. This file is the tracked source of truth for implem
 
 Current requirement counts:
 
-- Functional requirements: **54 done, 15 partial, 3 missing**
+- Functional requirements: **55 done, 14 partial, 3 missing**
 - Non-functional requirements: **5 done, 1 partial, 1 unverified**
 - Milestones: **M0-M7 and 0.2.0/0.3.0 done, v1.0 pending**
 
@@ -34,6 +34,7 @@ Current requirement counts:
 
 ### Orchestrator, parallelism and runtime
 - FR-7.1-FR-7.3 single-writer orchestration with write tickets and per-path FIFO/concurrent disjoint-path application.
+- FR-7.4 optimistic concurrency plus orchestrator-mediated read-your-writes: stale `base_hash` rejection and queued reads ordered behind in-flight writes.
 - FR-7.5 path ownership, overlap blocking and honesty check.
 - FR-7.6 atomic temp+rename writes.
 - FR-7.7 SQLite ticket journal + git checkpoint per completed task.
@@ -67,7 +68,6 @@ Current requirement counts:
 - FR-1.3 health checks: on-demand only; no timer-based probes or latency history.
 - FR-2.4 secret hygiene: secrets are absent from config/logs by construction; no active redaction layer for wrapped-CLI PTY transcripts.
 - FR-4.1 API quota sync: response usage parsing and on-demand billing-endpoint polling exist; no automatic sync timer.
-- FR-7.4 optimistic concurrency: stale `base_hash` rejection works; orchestrator-mediated read-your-writes is still missing.
 - FR-8.2 workspace isolation: separate workspace directories work; git-worktree mode is still missing.
 - FR-8.4 cancel/pause/resume: built-in runtime and wrapped CLI cancel/snapshot/resume now work; wrapped CLI pause is pre-spawn only; TUI pause buttons remain.
 - FR-9.3 transcripts: built-in runtime sessions are transcripted and viewable; quick-chat sessions are not; viewer has no search/export.
@@ -102,7 +102,6 @@ Current requirement counts:
    - Run a small live smoke with two projects sharing one process.
    - Run the v1.0 soak test and record NFR-2 numbers while it runs.
 2. **Close execution robustness gaps**
-   - FR-7.4 orchestrator-mediated read-your-writes.
    - FR-8.2 git-worktree isolation.
    - FR-8.4 TUI pause buttons once in-TUI runs exist.
 3. **Close provider/quota gaps**

@@ -2,7 +2,7 @@
 //! agents emit write tickets via `submit_write` only.
 
 use crate::error::RuntimeError;
-use crate::sink::{resolve_in, WriteSink};
+use crate::sink::{resolve_in, ReadSink, WriteSink};
 use rolen_core::types::{TicketState, WriteOp, WriteTicket};
 use rolen_providers::chat::{ToolCall, ToolOutcome, ToolSpec};
 use serde_json::{json, Value};
@@ -20,6 +20,8 @@ pub struct ToolContext {
     pub shell_allow: Vec<String>,
     /// The only write path: direct atomic write (M2) or orchestrator queue (M3).
     pub sink: Box<dyn WriteSink>,
+    /// FR-7.4: read path for read_file; direct or orchestrator-queued.
+    pub reader: Box<dyn ReadSink>,
     /// Task id stamped onto tickets.
     pub task_id: String,
     /// Project directory for ask_user question recording (FR-6.3); None when
@@ -113,9 +115,8 @@ pub fn execute(ctx: &ToolContext, call: &ToolCall) -> ToolOutcome {
 fn run(ctx: &ToolContext, call: &ToolCall) -> Result<String, RuntimeError> {
     match call.name.as_str() {
         "read_file" => {
-            let path = resolve_in(&ctx.workdir, &arg_str(&call.args, "path")?)?;
-            let bytes = std::fs::read(&path)?;
-            let text = String::from_utf8_lossy(&bytes);
+            let rel = arg_str(&call.args, "path")?;
+            let text = ctx.reader.read_text(&rel)?;
             Ok(cap(
                 text.chars().take(READ_CAP).collect(),
                 " (truncated at 100KB)",

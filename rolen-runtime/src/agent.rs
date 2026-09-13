@@ -3,7 +3,7 @@
 //! WriteSink as a ticket (FR-7.1).
 
 use crate::error::RuntimeError;
-use crate::sink::DirectWriteSink;
+use crate::sink::{DirectReadSink, DirectWriteSink};
 use crate::tools::{self, ToolContext};
 use rolen_core::ledger::Ledger;
 use rolen_core::rules::{self, RuleSet};
@@ -27,6 +27,8 @@ pub struct AgentOptions {
     pub task_id: Option<String>,
     /// External write sink (orchestrator queue in M3); direct write if None.
     pub sink: Option<Box<dyn crate::sink::WriteSink>>,
+    /// FR-7.4: external read sink ordered behind queued writes; direct if None.
+    pub reader: Option<Box<dyn crate::sink::ReadSink>>,
     /// Cooperative cancellation: checked between agent steps.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Cooperative pause (FR-8.4): while set, the loop waits between steps,
@@ -293,6 +295,10 @@ pub fn run(
             .sink
             .take()
             .unwrap_or_else(|| Box::new(DirectWriteSink::new(opts.workdir.clone()))),
+        reader: opts
+            .reader
+            .take()
+            .unwrap_or_else(|| Box::new(DirectReadSink::new(opts.workdir.clone()))),
         task_id: opts.task_id.clone().unwrap_or_else(|| session_id.clone()),
         project_dir: opts
             .project_dir

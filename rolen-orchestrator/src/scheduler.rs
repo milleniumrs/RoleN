@@ -11,7 +11,7 @@
 //! wrapper used by `rolen batch`.
 
 use crate::git;
-use crate::queue::{QueuedWriteSink, WriteQueue};
+use crate::queue::{QueuedReadSink, QueuedWriteSink, WriteQueue};
 use rolen_runtime::agent::{self, AgentEvent, AgentOptions, RunReport};
 use rolen_runtime::error::RuntimeError;
 use serde::{Deserialize, Serialize};
@@ -446,6 +446,7 @@ pub fn run_projects(
                     let workdir = state.run.workdir.clone();
                     let shell_allow = opts.shell_allow.clone();
                     let sink = QueuedWriteSink::new(state.queue.clone());
+                    let reader = QueuedReadSink::new(state.queue.clone());
                     let results = state.results.clone();
                     let finished = state.finished.clone();
                     let cancel = cancel.clone();
@@ -467,6 +468,7 @@ pub fn run_projects(
                             task_id: Some(task.id.clone()),
                             expected_paths: task.claimed_paths.clone(),
                             sink: Some(Box::new(sink)),
+                            reader: Some(Box::new(reader)),
                             cancel: Some(cancel),
                             pause,
                             shell_allow,

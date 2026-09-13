@@ -11,6 +11,13 @@ pub trait WriteSink: Send + Sync {
     fn apply(&self, ticket: &WriteTicket) -> Result<TicketState, RuntimeError>;
 }
 
+/// FR-7.4: read path for agent file reads. The direct implementation reads the
+/// workspace; the orchestrator swaps in a queued reader that is ordered behind
+/// pending write tickets for the same path.
+pub trait ReadSink: Send + Sync {
+    fn read_text(&self, path: &str) -> Result<String, RuntimeError>;
+}
+
 /// Sanitise an agent-supplied path into a safe *relative* path.
 ///
 /// Returns None when the path is absolute/drive-qualified or climbs above its
@@ -121,6 +128,23 @@ impl WriteSink for DirectWriteSink {
             }
         }
         Ok(TicketState::Applied)
+    }
+}
+
+pub struct DirectReadSink {
+    pub root: PathBuf,
+}
+
+impl DirectReadSink {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+}
+
+impl ReadSink for DirectReadSink {
+    fn read_text(&self, path: &str) -> Result<String, RuntimeError> {
+        let path = resolve_in(&self.root, path)?;
+        Ok(std::fs::read_to_string(path)?)
     }
 }
 

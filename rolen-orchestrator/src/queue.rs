@@ -10,7 +10,7 @@
 use rolen_core::ledger::Ledger;
 use rolen_core::types::{TicketState, WriteOp, WriteTicket};
 use rolen_runtime::error::RuntimeError;
-use rolen_runtime::sink::{resolve_in, WriteSink};
+use rolen_runtime::sink::{resolve_in, ReadSink, WriteSink};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -20,6 +20,10 @@ use std::sync::Arc;
 
 enum Msg {
     New(WriteTicket, Sender<TicketState>),
+    Read {
+        path: PathBuf,
+        respond: Sender<Result<String, RuntimeError>>,
+    },
     Done {
         path: PathBuf,
         state: TicketState,
@@ -78,6 +82,18 @@ impl WriteQueue {
         }
     }
 
+    /// FR-7.4: read a workspace text file through the dispatcher. Reads for a
+    /// path are ordered behind queued/in-flight write tickets for that path.
+    pub fn read_text(&self, path: &str) -> Result<String, RuntimeError> {
+        let (rtx, rrx) = channel();
+        let _ = self.tx.send(Msg::Read {
+            path: PathBuf::from(path),
+            respond: rtx,
+        });
+        rrx.recv()
+            .unwrap_or_else(|_| Err(RuntimeError::Sandbox("read dispatcher closed".into())))
+    }
+
     /// Tickets currently waiting or being applied.
     pub fn depth(&self) -> usize {
         self.depth.load(Ordering::Relaxed)
@@ -129,11 +145,30 @@ impl WriteSink for QueuedWriteSink {
     }
 }
 
+/// FR-7.4 read facade used by agent threads when the orchestrator owns writes.
+pub struct QueuedReadSink {
+    queue: Arc<WriteQueue>,
+}
+
+impl QueuedReadSink {
+    pub fn new(queue: Arc<WriteQueue>) -> Self {
+        Self { queue }
+    }
+}
+
+impl ReadSink for QueuedReadSink {
+    fn read_text(&self, path: &str) -> Result<String, RuntimeError> {
+        self.queue.read_text(path)
+    }
+}
+
 // ------------------------------------------------------------- dispatcher
 
 fn dispatcher_loop(root: PathBuf, rx: Receiver<Msg>, worker_tx: Sender<Msg>) {
     let mut inbox: HashMap<PathBuf, VecDeque<(WriteTicket, Sender<TicketState>)>> = HashMap::new();
     let mut inflight: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut pending_reads: HashMap<PathBuf, Vec<Sender<Result<String, RuntimeError>>>> =
+        HashMap::new();
 
     loop {
         match rx.recv() {
@@ -146,6 +181,13 @@ fn dispatcher_loop(root: PathBuf, rx: Receiver<Msg>, worker_tx: Sender<Msg>) {
                     dispatch(&root, &path, ticket, rtx, &worker_tx);
                 }
             }
+            Ok(Msg::Read { path, respond }) => {
+                if inflight.contains(&path) || inbox.contains_key(&path) {
+                    pending_reads.entry(path).or_default().push(respond);
+                } else {
+                    fulfill_read(&root, &path, respond);
+                }
+            }
             Ok(Msg::Done {
                 path,
                 state,
@@ -153,24 +195,33 @@ fn dispatcher_loop(root: PathBuf, rx: Receiver<Msg>, worker_tx: Sender<Msg>) {
                 ..
             }) => {
                 let _ = respond.send(state);
-                match inbox.get_mut(&path) {
-                    Some(q) => {
-                        if let Some((next, rtx)) = q.pop_front() {
-                            dispatch(&root, &path, next, rtx, &worker_tx);
-                            // path stays inflight
-                        } else {
-                            inbox.remove(&path);
-                            inflight.remove(&path);
-                        }
+                let mut more_writes = false;
+                if let Some(q) = inbox.get_mut(&path) {
+                    if let Some((next, rtx)) = q.pop_front() {
+                        dispatch(&root, &path, next, rtx, &worker_tx);
+                        more_writes = true; // path stays inflight
+                    } else {
+                        inbox.remove(&path);
                     }
-                    None => {
-                        inflight.remove(&path);
+                }
+                if !more_writes {
+                    inflight.remove(&path);
+                    if let Some(readers) = pending_reads.remove(&path) {
+                        for respond in readers {
+                            fulfill_read(&root, &path, respond);
+                        }
                     }
                 }
             }
             Ok(Msg::Shutdown) | Err(_) => break,
         }
     }
+}
+
+fn fulfill_read(root: &Path, rel: &Path, respond: Sender<Result<String, RuntimeError>>) {
+    let result = resolve_in(root, &rel.to_string_lossy())
+        .and_then(|path| std::fs::read_to_string(path).map_err(RuntimeError::Io));
+    let _ = respond.send(result);
 }
 
 fn dispatch(
@@ -398,6 +449,23 @@ mod tests {
             std::fs::read_to_string(dir.join("f.txt")).unwrap(),
             "top\na\nB\nc\n"
         );
+
+        q.shutdown();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_are_ordered_after_a_queued_write_to_the_same_path() {
+        // FR-7.4: even if the caller has not waited on the write ticket yet, a
+        // read through the queue is dispatched behind that in-flight write.
+        let dir = testdir("read-your-writes");
+        std::fs::write(dir.join("a.txt"), "old").unwrap();
+        let q = WriteQueue::new(dir.clone());
+
+        let handle = q.submit(ticket("t1", "a.txt", "new", None));
+        let text = q.read_text("a.txt").unwrap();
+        assert_eq!(text, "new");
+        assert_eq!(handle.wait(), TicketState::Applied);
 
         q.shutdown();
         std::fs::remove_dir_all(&dir).ok();
